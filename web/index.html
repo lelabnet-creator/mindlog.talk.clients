@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ID · mindlog</title>
+    <meta name="description" content="Votre carte d'identité en ligne, simple et épurée." />
+    <script>
+      // Applique le thème enregistré avant le rendu pour éviter un flash.
+      try {
+        var t = localStorage.getItem("mindlog.theme");
+        document.documentElement.setAttribute("data-theme", t === "light" ? "light" : "dark");
+      } catch (e) {}
+    </script>
+    <link rel="icon" type="image/svg+xml" href="/static/milo.svg" />
+    <link rel="stylesheet" href="/static/style.css?v=__V__" />
+    <!-- Visite guidée « Milo » : Shepherd.js (vendored maison, servi en propre pour le hors-ligne et la CSP). -->
+    <link rel="stylesheet" href="/static/vendor/shepherd/shepherd.css?v=__V__" />
+    <link rel="stylesheet" href="/static/vendor/shepherd/milo-tour.css?v=__V__" />
+    <!-- PWA : manifest, couleur de thème, icônes iOS -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#0f1115" />
+    <link rel="apple-touch-icon" href="/static/icon-192.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="mindlog id" />
+  </head>
+  <body>
+<main id="app"><p class="loading">Chargement…</p></main>
+    <footer id="footer"></footer>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js" defer></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js" defer></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js" defer></script>
+    <!-- Shepherd.js (UMD, expose window.Shepherd) — moteur de la visite guidée de Milo. -->
+    <script src="/static/vendor/shepherd/shepherd.min.js?v=__V__" defer></script>
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
+    <script>
+      window.__APP_V__ = "__V__";
+      window.__APP_VERSION__ = "%%APP_VERSION%%";
+      window.__TURNSTILE_SITE_KEY__ = "%%TURNSTILE_SITE_KEY%%";
+    </script>
+    <script type="module">
+      // Prep bascule client/backend : si le backend ne templatise plus la page
+      // (placeholder `%%APP_VERSION%%` non substitué), la config runtime est
+      // récupérée via l'API `/api/config`. En mode templaté (valeurs déjà
+      // injectées), c'est un no-op — aucune requête, comportement identique.
+      // Ce module s'exécute avant `app.js` (ordre des modules), donc les globales
+      // sont prêtes quand l'app démarre.
+      if (String(window.__APP_VERSION__).indexOf("%%") === 0) {
+        try {
+          const cfg = await fetch("/api/config").then((r) => r.json());
+          window.__APP_VERSION__ = cfg.appVersion;
+          window.__TURNSTILE_SITE_KEY__ = cfg.turnstileSiteKey;
+          window.__APP_V__ = cfg.assetVersion;
+        } catch (_) {
+          /* réseau indisponible : on conserve les valeurs en place */
+        }
+      }
+    </script>
+    <script src="/static/app.js?v=__V__" type="module"></script>
+    <script>
+      // Coquille PWA : enregistre le service worker (offline shell + installable).
+      if ("serviceWorker" in navigator) {
+        window.addEventListener("load", function () {
+          navigator.serviceWorker.register("/sw.js").catch(function () { /* non critique */ });
+        });
+      }
+    </script>
+    <script src="/static/push-client.js?v=__V__" defer></script>
+    <script src="/static/local-db.js?v=__V__" defer></script>
+  </body>
+</html>

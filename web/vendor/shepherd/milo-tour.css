@@ -1,0 +1,178 @@
+/*
+ * milo-tour.css — habillage « maison » de Shepherd.js pour la visite guidée de Milo.
+ * S'appuie sur les variables de thème de l'app (style.css) : suit donc
+ * automatiquement le mode clair/sombre et la couleur d'accent choisie.
+ */
+
+/* ---- Voile modal : assombrit le fond, met en valeur la cible ---- */
+.shepherd-modal-overlay-container {
+  z-index: 11000;
+}
+.shepherd-modal-overlay-container.shepherd-modal-is-visible {
+  opacity: 0.55;
+}
+
+/* ---- Bulle ---- */
+.shepherd-element.milo-shepherd {
+  z-index: 11001;
+  max-width: 380px;
+  background: var(--card);
+  color: var(--fg);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45), 0 0 0 1px var(--accent-soft);
+  font-family: var(--font, system-ui, sans-serif);
+}
+
+.milo-shepherd .shepherd-content {
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.milo-shepherd .shepherd-text {
+  color: var(--fg);
+  padding: 1rem 1.1rem 0.4rem;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+/* ---- La flèche reprend la couleur de la bulle ---- */
+.milo-shepherd .shepherd-arrow::before {
+  background: var(--card);
+  border: 1px solid var(--accent-line);
+}
+.milo-shepherd[data-popper-placement^="top"] .shepherd-arrow::before { border-top: 0; border-left: 0; }
+.milo-shepherd[data-popper-placement^="bottom"] .shepherd-arrow::before { border-bottom: 0; border-right: 0; }
+.milo-shepherd[data-popper-placement^="left"] .shepherd-arrow::before { border-bottom: 0; border-left: 0; }
+.milo-shepherd[data-popper-placement^="right"] .shepherd-arrow::before { border-top: 0; border-right: 0; }
+
+/* ---- Croix de fermeture ---- */
+.milo-shepherd .shepherd-cancel-icon {
+  color: var(--muted);
+  font-size: 1.4rem;
+  transition: color 0.15s ease, transform 0.15s ease;
+}
+.milo-shepherd .shepherd-cancel-icon:hover {
+  color: var(--accent-ink);
+  transform: rotate(90deg);
+}
+
+/* ---- Pied : boutons ---- */
+.milo-shepherd .shepherd-footer {
+  padding: 0.5rem 1.1rem 1rem;
+  gap: 0.5rem;
+}
+
+.milo-shepherd .shepherd-button {
+  background: var(--accent);
+  color: var(--on-accent, #0b0d12);
+  border: 1px solid var(--accent-ink);
+  border-radius: 10px;
+  padding: 0.5rem 1.1rem;
+  font-weight: 600;
+  font-size: 0.85rem;
+  transition: background 0.15s ease, border-color 0.15s ease, filter 0.15s ease;
+}
+.milo-shepherd .shepherd-button:not(:disabled):hover {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+  color: var(--on-accent, #0b0d12);
+}
+.milo-shepherd .shepherd-button.shepherd-button-secondary {
+  background: var(--chip);
+  color: var(--fg);
+  border-color: var(--line);
+}
+.milo-shepherd .shepherd-button.shepherd-button-secondary:not(:disabled):hover {
+  background: var(--inset);
+  border-color: var(--accent-line);
+  filter: none;
+}
+
+/* ---- Ligne « Milo parle » : avatar + texte ---- */
+.milo-tour-step {
+  display: flex;
+  gap: 0.7rem;
+  align-items: flex-start;
+}
+.milo-tour-step .milo-tour-ava {
+  flex: 0 0 46px;
+  width: 46px;
+  height: 46px;
+  display: grid;
+  place-items: center;
+  background: var(--accent-soft);
+  border-radius: 50%;
+  padding: 4px;
+}
+.milo-tour-step .milo-tour-ava svg { width: 100%; height: 100%; }
+.milo-tour-step .milo-tour-say { flex: 1 1 auto; padding-top: 0.1rem; }
+.milo-tour-step .milo-tour-say b { color: var(--accent-ink); }
+
+/* ===================================================================
+ * Sélecteur d'ambiance (overlay maison réutilisant .overlay/.panel)
+ * =================================================================== */
+.milo-tour-panel { max-width: 440px; text-align: center; }
+.milo-tour-hero {
+  width: 96px;
+  height: 96px;
+  margin: 0.2rem auto 0.6rem;
+  display: grid;
+  place-items: center;
+  background: var(--accent-soft);
+  border-radius: 50%;
+  padding: 8px;
+}
+.milo-tour-hero svg { width: 100%; height: 100%; }
+
+.milo-tour-choices {
+  display: grid;
+  gap: 0.7rem;
+  margin: 1.1rem 0 0.8rem;
+}
+.milo-tour-choice {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  grid-template-rows: auto auto;
+  column-gap: 0.8rem;
+  align-items: center;
+  text-align: left;
+  padding: 0.85rem 1rem;
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.1s ease;
+}
+.milo-tour-choice:hover {
+  border-color: var(--accent-ink);
+  background: var(--accent-soft);
+}
+.milo-tour-choice:active { transform: translateY(1px); }
+.milo-tour-choice .mtc-emo {
+  grid-row: 1 / span 2;
+  font-size: 1.8rem;
+  text-align: center;
+}
+.milo-tour-choice .mtc-t {
+  font-weight: 700;
+  color: var(--fg);
+  font-size: 0.98rem;
+}
+.milo-tour-choice .mtc-d {
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+.milo-tour-skip {
+  margin-top: 0.3rem;
+  opacity: 0.8;
+}
+
+/* ---- Bouton lanceur « Visite » du tableau de bord ---- */
+#hm-tour-btn { white-space: nowrap; }
+
+@media (prefers-reduced-motion: reduce) {
+  .milo-shepherd .shepherd-cancel-icon:hover { transform: none; }
+  .milo-tour-choice:active { transform: none; }
+}

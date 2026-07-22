@@ -1,0 +1,16 @@
+<svg width="120" height="120" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Milo, la mascotte">
+  <line x1="14" y1="109" x2="108" y2="109" stroke="#5a6a4a" stroke-width="5" stroke-linecap="round"/>
+  <path d="M40 86 C18 84 9 100 16 110 C21 117 35 116 36 105 C36.5 98 28 95 24 101" stroke="#43b58f" stroke-width="8" fill="none" stroke-linecap="round"/>
+  <path d="M64 92 C69 101 65 106 58 110" stroke="#3aa17e" stroke-width="7" fill="none" stroke-linecap="round"/>
+  <path d="M46 92 C41 101 47 106 53 110" stroke="#3aa17e" stroke-width="7" fill="none" stroke-linecap="round"/>
+  <path d="M40 93 C25 87 25 62 33 49 C41 35 58 30 76 34 C97 39 103 60 95 78 C89 92 70 97 52 96 C48 96 44 95 40 93 Z" fill="#43b58f" stroke="#2c7d63" stroke-width="2.5"/>
+  <ellipse cx="55" cy="81" rx="23" ry="11" fill="#7fdcc0"/>
+  <path d="M32 55 q4 -12 10 -9 q1 -12 9 -9 q4 -11 10 -7 q4 -10 10 -6" stroke="#5fd39a" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M62 72 q13 8 24 0" stroke="#1f5546" stroke-width="3" fill="none" stroke-linecap="round"/>
+  <circle cx="68" cy="66" r="4" fill="#5fd39a" opacity="0.3"/>
+  <circle cx="86" cy="44" r="18" fill="#50c79c" stroke="#2c7d63" stroke-width="2.5"/>
+  <circle cx="88" cy="44" r="12.5" fill="#f4f8ff"/>
+  <circle cx="90" cy="45" r="7" fill="#5fd39a"/>
+  <circle cx="91" cy="45" r="3.2" fill="#10141d"/>
+  <circle cx="87.4" cy="41.3" r="2" fill="#ffffff"/>
+</svg>

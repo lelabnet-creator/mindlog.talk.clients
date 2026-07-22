@@ -1,0 +1,1050 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Diffuser un live — mindlog · id</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" href="/static/milo.svg">
+  <style>
+    /* ── Tokens ─────────────────────────────────────────────────────────────── */
+    .bc {
+      --bc-bg: #0a0a12;
+      --bc-surface: #16161f;
+      --bc-surface-2: #1f1f2a;
+      --bc-surface-3: #292934;
+      --bc-border: #2a2a37;
+      --bc-text: #e4e4ef;
+      --bc-muted: #8a8a99;
+      --bc-accent: #e11d48;
+      --bc-success: #22c55e;
+      --bc-warn: #f59e0b;
+      --bc-danger: #ef4444;
+      --bc-radius: 12px;
+      --bc-radius-sm: 8px;
+      --bc-shadow-lg: 0 12px 32px rgba(0,0,0,.35), 0 2px 4px rgba(0,0,0,.5);
+      --bc-font: 'Inter', ui-sans-serif, system-ui, sans-serif;
+      --bc-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    /* Page shell pleine hauteur. align-items:stretch annule le centrage
+       horizontal hérité du `body { align-items: center }` global qui
+       limitait la largeur de <main> à son contenu intrinsèque. */
+    .bc {
+      background: var(--bc-bg); color: var(--bc-text);
+      height: 100dvh; width: 100%; font-family: var(--bc-font);
+      padding: .85rem clamp(.75rem, 1.5vw, 1.25rem);
+      display: flex; flex-direction: column;
+      align-items: stretch;
+      overflow: hidden;
+      box-sizing: border-box;
+    }
+    .bc-shell {
+      flex: 1; min-height: 0; width: 100%;
+      display: flex; flex-direction: column; gap: .75rem;
+    }
+
+    /* ── HEADER : title input + source + status pills + actions ───────────── */
+    .bc-topbar {
+      display: flex; align-items: center; gap: .55rem; flex: none;
+      flex-wrap: wrap;
+    }
+    .bc-input-inline, .bc-select-inline {
+      background: var(--bc-surface); color: var(--bc-text);
+      border: 1px solid var(--bc-border); border-radius: var(--bc-radius-sm);
+      padding: .5rem .7rem; font: inherit; font-size: .85rem;
+      transition: border-color .15s, background .15s;
+    }
+    .bc-input-inline { flex: 1; min-width: 12rem; max-width: 28rem; }
+    .bc-input-inline:focus, .bc-select-inline:focus { outline: none; border-color: var(--bc-accent); }
+    .bc-input-inline:disabled { opacity: .65; background: var(--bc-surface-2); cursor: not-allowed; }
+    .bc-select-inline:disabled { opacity: .65; cursor: not-allowed; }
+    .bc-topbar-spacer { flex: 1; min-width: 0; }
+    .bc-topbar-pills { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
+    .bc-topbar-actions { display: flex; gap: .4rem; align-items: center; }
+
+    /* Pills */
+    .bc-pill {
+      display: inline-flex; align-items: center; gap: .35rem;
+      padding: .3rem .65rem; border-radius: 999px;
+      background: var(--bc-surface-2); color: var(--bc-text);
+      font-size: .73rem; font-weight: 600; letter-spacing: .02em;
+      border: 1px solid var(--bc-border);
+    }
+    .bc-pill .bc-dot { width: .4rem; height: .4rem; border-radius: 50%; background: var(--bc-muted); }
+    .bc-pill.rec { background: rgba(225,29,72,.15); color: var(--bc-accent); border-color: transparent; }
+    .bc-pill.rec .bc-dot { background: var(--bc-accent); box-shadow: 0 0 8px var(--bc-accent); animation: bc-pulse 1.4s infinite; }
+    .bc-pill.q-HD { background: rgba(34,197,94,.15); color: var(--bc-success); border-color: transparent; }
+    .bc-pill.q-SD { background: rgba(245,158,11,.15); color: var(--bc-warn); border-color: transparent; }
+    .bc-pill.q-LD { background: rgba(249,115,22,.15); color: #fb923c; border-color: transparent; }
+    .bc-pill.q-POTATO { background: rgba(239,68,68,.15); color: var(--bc-danger); border-color: transparent; }
+    @keyframes bc-pulse { 0%,100%{opacity:1;} 50%{opacity:.4;} }
+
+    /* Icon buttons (header utilitaires) */
+    .bc-iconbtn {
+      width: 36px; height: 36px;
+      background: var(--bc-surface); color: var(--bc-text);
+      border: 1px solid var(--bc-border); border-radius: var(--bc-radius-sm);
+      cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+      transition: background .15s, border-color .15s;
+    }
+    .bc-iconbtn:hover:not(:disabled) { background: var(--bc-surface-2); border-color: var(--bc-muted); }
+    .bc-iconbtn:focus-visible { outline: 2px solid var(--bc-accent); outline-offset: 2px; }
+    .bc-iconbtn:disabled { opacity: .4; cursor: not-allowed; }
+    .bc-iconbtn svg { width: 16px; height: 16px; }
+    .bc-iconbtn[hidden] { display: none; }
+
+    /* ── MAIN GRID : stage 1fr + tabs 360px ───────────────────────────────── */
+    .bc-main {
+      flex: 1; min-height: 0;
+      display: grid; gap: .75rem;
+      grid-template-columns: 1fr;
+    }
+    @media (min-width: 1024px) { .bc-main { grid-template-columns: minmax(0, 1fr) 380px; } }
+
+    /* Stage column = stage hero + control bar */
+    .bc-stage-col {
+      min-width: 0; min-height: 0;
+      display: grid; grid-template-rows: minmax(0, 1fr) auto;
+      gap: .65rem;
+    }
+
+    /* Stage */
+    .bc-stage {
+      position: relative; background: #000; border-radius: var(--bc-radius);
+      overflow: hidden; min-height: 0;
+      box-shadow: var(--bc-shadow-lg);
+    }
+    .bc-stage video { width: 100%; height: 100%; display: block; object-fit: contain; background: #000; }
+    .bc-stage-empty {
+      position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+      flex-direction: column; gap: .85rem; color: var(--bc-muted); text-align: center; padding: 1.5rem;
+    }
+    .bc-stage-empty svg { width: 56px; height: 56px; opacity: .4; }
+    .bc-stage-empty h3 { font-size: 1rem; font-weight: 600; margin: 0; color: var(--bc-text); }
+    .bc-stage-empty p { font-size: .85rem; max-width: 360px; line-height: 1.5; }
+
+    /* PIP overlay (drag/resize) */
+    .pip-handle {
+      position: absolute; box-sizing: border-box;
+      border: 2px dashed rgba(255,255,255,.9);
+      background: rgba(255,255,255,.06);
+      cursor: move; touch-action: none;
+      display: none; z-index: 5; border-radius: 4px;
+    }
+    .pip-handle::after {
+      content: "✋"; position: absolute; top: .25rem; left: .35rem;
+      color: white; text-shadow: 0 1px 2px #000; font-size: 14px; line-height: 1;
+      pointer-events: none;
+    }
+    .pip-handle.active { display: block; }
+    .pip-resize {
+      position: absolute; right: 0; bottom: 0; width: 16px; height: 16px;
+      cursor: nwse-resize; touch-action: none;
+      background: linear-gradient(135deg, transparent 50%, rgba(255,255,255,.85) 50%);
+      border-bottom-right-radius: 4px;
+    }
+
+    /* Stage overlays */
+    .bc-stage-top-overlay {
+      position: absolute; top: .75rem; left: .75rem; right: .75rem;
+      display: flex; gap: .4rem; pointer-events: none;
+    }
+    .bc-stage-top-overlay .bc-pill { pointer-events: auto; }
+    .bc-stage-top-overlay .bc-pill.rec { background: rgba(225,29,72,.85); color: #fff; }
+
+    /* Bottom controls overlay (mic/cam, persistent during live) */
+    .bc-stage-mc {
+      position: absolute; left: .75rem; bottom: .75rem;
+      display: flex; gap: .4rem; z-index: 6;
+    }
+    .bc-mc-btn {
+      width: 40px; height: 40px;
+      background: rgba(0,0,0,.6); color: #fff; border: 0; border-radius: 50%;
+      cursor: pointer; backdrop-filter: blur(8px);
+      display: inline-flex; align-items: center; justify-content: center;
+      transition: background .15s, transform .15s;
+    }
+    .bc-mc-btn:hover { background: rgba(0,0,0,.85); transform: scale(1.05); }
+    .bc-mc-btn.off { background: var(--bc-danger); }
+    .bc-mc-btn svg { width: 18px; height: 18px; }
+    .bc-mc-btn[hidden] { display: none; }
+
+    /* ── CONTROL BAR (sous la stage) ─────────────────────────────────────── */
+    .bc-controls {
+      display: flex; gap: .5rem; align-items: center; flex-wrap: wrap;
+      padding: .6rem .75rem;
+      background: var(--bc-surface); border: 1px solid var(--bc-border);
+      border-radius: var(--bc-radius);
+    }
+    .bc-controls .sp { flex: 1; }
+    .bc-cta {
+      background: var(--bc-accent); color: #fff; border: 0;
+      border-radius: var(--bc-radius-sm); padding: .65rem 1.1rem;
+      cursor: pointer; font: inherit; font-weight: 700; font-size: .9rem;
+      display: inline-flex; align-items: center; gap: .4rem;
+      transition: background .15s, transform .15s;
+    }
+    .bc-cta:hover:not(:disabled) { background: #be123c; transform: scale(1.02); }
+    .bc-cta:disabled { opacity: .5; cursor: not-allowed; }
+    .bc-cta.stop { background: #1f1f2a; color: var(--bc-danger); border: 1px solid var(--bc-danger); }
+    .bc-cta.stop:hover:not(:disabled) { background: var(--bc-danger); color: #fff; }
+    .bc-cta svg { width: 14px; height: 14px; }
+    .bc-btn {
+      background: var(--bc-surface-2); color: var(--bc-text);
+      border: 1px solid var(--bc-border); border-radius: var(--bc-radius-sm);
+      padding: .55rem .85rem; cursor: pointer; font: inherit; font-size: .85rem; font-weight: 600;
+      display: inline-flex; align-items: center; gap: .35rem;
+      transition: background .15s, border-color .15s;
+    }
+    .bc-btn:hover:not(:disabled) { background: var(--bc-surface-3); border-color: var(--bc-muted); }
+    .bc-btn:disabled { opacity: .4; cursor: not-allowed; }
+    .bc-btn svg { width: 14px; height: 14px; }
+    .bc-btn[hidden] { display: none; }
+
+    /* Dropdown menu — "Disposition" */
+    .bc-menu-wrap { position: relative; }
+    .bc-menu {
+      position: absolute; bottom: calc(100% + .35rem); left: 0;
+      background: var(--bc-surface); border: 1px solid var(--bc-border);
+      border-radius: var(--bc-radius); padding: .5rem;
+      box-shadow: var(--bc-shadow-lg); min-width: 240px;
+      z-index: 20;
+      display: none;
+    }
+    .bc-menu[data-open="true"] { display: block; }
+    .bc-menu-head { font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: var(--bc-muted); padding: .25rem .5rem .4rem; }
+    .bc-menu-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: .35rem; }
+    .lyt {
+      height: 38px; padding: 0;
+      border: 1px solid var(--bc-border); border-radius: var(--bc-radius-sm);
+      background: var(--bc-surface-2); position: relative; cursor: pointer;
+      transition: border-color .15s, box-shadow .15s;
+    }
+    .lyt:hover { border-color: var(--bc-accent); }
+    .lyt.on { border-color: var(--bc-accent); box-shadow: 0 0 0 2px rgba(225,29,72,.35); }
+    .lyt span { position: absolute; background: #94a3b8; border-radius: 2px; }
+    .lyt span:nth-child(2) { background: #fff; }
+
+    /* Dropdown — "Qualité" (liste verticale d'options) */
+    .bc-menu-list { display: flex; flex-direction: column; gap: .2rem; }
+    .qty {
+      display: flex; align-items: baseline; justify-content: space-between; gap: .75rem;
+      padding: .45rem .55rem; border: 1px solid transparent; border-radius: var(--bc-radius-sm);
+      background: transparent; color: var(--bc-text); font: inherit; text-align: left; cursor: pointer;
+      transition: background .12s, border-color .12s;
+    }
+    .qty:hover { background: var(--bc-surface-2); }
+    .qty.on { border-color: var(--bc-accent); background: rgba(225,29,72,.10); }
+    .qty b { font-size: .82rem; font-weight: 600; }
+    .qty small { color: var(--bc-muted); font-size: .7rem; font-family: var(--bc-mono); }
+    #btn-quality-label { font-weight: 700; }
+
+    /* ── RIGHT SIDEBAR : tabs ────────────────────────────────────────────── */
+    .bc-side {
+      display: flex; flex-direction: column;
+      background: var(--bc-surface); border: 1px solid var(--bc-border);
+      border-radius: var(--bc-radius); min-height: 0; overflow: hidden;
+    }
+    .bc-tabs {
+      display: flex; gap: 0; border-bottom: 1px solid var(--bc-border);
+      background: var(--bc-surface-2);
+      flex: none;
+    }
+    .bc-tab {
+      flex: 1; padding: .7rem .35rem;
+      background: transparent; border: 0; color: var(--bc-muted);
+      cursor: pointer; font: inherit; font-size: .8rem; font-weight: 600;
+      display: inline-flex; align-items: center; justify-content: center; gap: .35rem;
+      transition: color .15s, background .15s;
+      position: relative;
+    }
+    .bc-tab:hover { color: var(--bc-text); }
+    .bc-tab.active { color: var(--bc-text); background: var(--bc-surface); }
+    .bc-tab.active::after {
+      content: ""; position: absolute; left: .5rem; right: .5rem; bottom: -1px; height: 2px;
+      background: var(--bc-accent); border-radius: 2px;
+    }
+    .bc-tab svg { width: 14px; height: 14px; }
+    .bc-tab .bc-tab-badge {
+      background: var(--bc-accent); color: #fff;
+      min-width: 18px; height: 18px; padding: 0 .35rem;
+      display: inline-flex; align-items: center; justify-content: center;
+      border-radius: 999px; font-size: .65rem; font-weight: 700;
+    }
+    .bc-tab .bc-tab-badge[hidden] { display: none; }
+
+    .bc-tab-panel {
+      flex: 1; min-height: 0;
+      display: none; flex-direction: column;
+    }
+    .bc-tab-panel.active { display: flex; }
+
+    /* Chat */
+    .bc-chat-list { flex: 1; min-height: 0; overflow-y: auto; padding: .75rem; display: flex; flex-direction: column; gap: .55rem; font-size: .9rem; }
+    .bc-chat-list .chat-row { display: flex; gap: .35rem; flex-wrap: wrap; align-items: baseline; line-height: 1.45; }
+    .bc-chat-list .chat-row b { color: #60a5fa; font-weight: 600; font-size: .85rem; }
+    .bc-chat-list .chat-row.host b { color: var(--bc-accent); }
+    .bc-chat-list .chat-row time { color: var(--bc-muted); font-size: .7rem; margin-left: auto; }
+    .bc-chat-input { display: flex; gap: .4rem; padding: .65rem; border-top: 1px solid var(--bc-border); background: var(--bc-surface-2); flex: none; }
+    .bc-chat-input input { flex: 1; min-width: 0; background: var(--bc-bg); color: var(--bc-text); border: 1px solid var(--bc-border); border-radius: var(--bc-radius-sm); padding: .5rem .65rem; font: inherit; font-size: .88rem; }
+    .bc-chat-input input:focus { outline: none; border-color: var(--bc-accent); }
+    .bc-chat-input input:disabled { opacity: .5; }
+    .bc-chat-send {
+      background: var(--bc-accent); color: #fff; border: 0;
+      border-radius: var(--bc-radius-sm); padding: 0 .85rem;
+      cursor: pointer; font-weight: 600; font: inherit; display: inline-flex; align-items: center;
+    }
+    .bc-chat-send:hover:not(:disabled) { background: #be123c; }
+    .bc-chat-send:disabled { opacity: .5; cursor: not-allowed; }
+    .bc-chat-send svg { width: 14px; height: 14px; }
+    .bc-empty-state { text-align: center; padding: 2rem 1rem; color: var(--bc-muted); font-size: .85rem; }
+    .bc-empty-state svg { width: 32px; height: 32px; opacity: .35; margin-bottom: .55rem; }
+
+    /* Viewers tab */
+    .bc-viewers-list { flex: 1; min-height: 0; overflow-y: auto; padding: .75rem; display: flex; flex-direction: column; gap: .45rem; }
+    .bc-viewer-card {
+      display: grid; grid-template-columns: 36px 1fr auto; gap: .65rem;
+      padding: .55rem .65rem; border-radius: var(--bc-radius-sm);
+      background: var(--bc-bg); border: 1px solid var(--bc-border);
+      align-items: center;
+      transition: border-color .15s;
+    }
+    .bc-viewer-card.warn { border-color: rgba(245,158,11,.4); }
+    .bc-viewer-card.bad { border-color: rgba(239,68,68,.4); }
+    .bc-vw-av {
+      width: 36px; height: 36px; border-radius: 50%; overflow: hidden;
+      display: inline-flex; align-items: center; justify-content: center;
+      background: var(--bc-surface-2); color: #fff;
+      font-size: .9rem; font-weight: 700;
+    }
+    .bc-vw-av img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .bc-vw-info { min-width: 0; }
+    .bc-vw-handle {
+      display: block; font-size: .9rem; font-weight: 600;
+      color: var(--bc-text); text-decoration: none;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .bc-vw-handle:hover { color: var(--bc-accent); text-decoration: underline; }
+    .bc-vw-meta {
+      display: flex; gap: .55rem; align-items: center;
+      font-family: var(--bc-mono); font-size: .7rem; color: var(--bc-muted);
+      margin-top: .15rem;
+    }
+    .bc-vw-meta .ok { color: var(--bc-success); }
+    .bc-vw-meta .warn { color: var(--bc-warn); }
+    .bc-vw-meta .bad { color: var(--bc-danger); }
+    .bc-vw-meta-sep { width: 3px; height: 3px; border-radius: 50%; background: var(--bc-border); display: inline-block; }
+    .bc-vw-status { font-size: .7rem; }
+
+    /* Stats tab */
+    .bc-stats-body { padding: .85rem; flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: .85rem; }
+    .bc-stats-kv {
+      display: grid; gap: .25rem;
+    }
+    .bc-stats-section-title { font-size: .7rem; text-transform: uppercase; letter-spacing: .05em; color: var(--bc-muted); margin: .5rem 0 .25rem; }
+    .bc-stats-row {
+      display: flex; align-items: baseline; justify-content: space-between; gap: .5rem;
+      padding: .35rem .55rem; border-radius: var(--bc-radius-sm);
+      background: var(--bc-bg); border: 1px solid var(--bc-border);
+    }
+    .bc-stats-row b { font-size: .72rem; color: var(--bc-muted); font-weight: 600; }
+    .bc-stats-row span { font-family: var(--bc-mono); font-size: .82rem; font-weight: 600; }
+    .bc-stats-row.good span { color: var(--bc-success); }
+    .bc-stats-row.warn span { color: var(--bc-warn); }
+    .bc-stats-row.bad span { color: var(--bc-danger); }
+    .bc-log {
+      background: var(--bc-bg); color: #cdd2db; padding: .55rem .65rem;
+      border-radius: var(--bc-radius-sm); font-family: var(--bc-mono); font-size: 10.5px;
+      max-height: 10rem; min-height: 5rem; overflow: auto; white-space: pre-wrap; line-height: 1.45;
+      border: 1px solid var(--bc-border);
+    }
+
+    /* Toast */
+    .bc-toast {
+      position: fixed; bottom: 1.25rem; left: 50%; transform: translateX(-50%);
+      background: var(--bc-surface); color: var(--bc-text);
+      padding: .6rem 1rem; border-radius: 999px; border: 1px solid var(--bc-border);
+      font-size: .85rem; box-shadow: var(--bc-shadow-lg);
+      z-index: 50; opacity: 0; pointer-events: none; transition: opacity .25s;
+    }
+    .bc-toast[data-show="true"] { opacity: 1; pointer-events: auto; }
+
+    /* Mobile : stack vertical, sidebar passe en dessous */
+    @media (max-width: 1023px) {
+      .bc { height: auto; min-height: 100dvh; overflow: visible; }
+      .bc-shell, .bc-main { flex: none; }
+      .bc-stage-col { display: flex; flex-direction: column; }
+      .bc-stage { aspect-ratio: 16/9; }
+      .bc-side { min-height: 460px; max-height: 65vh; }
+      .bc-input-inline { max-width: 100%; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .bc-pill.rec .bc-dot { animation: none; }
+      .bc-cta, .bc-btn, .bc-iconbtn, .bc-mc-btn, .bc-chat-send, .bc-tab { transition: none; }
+    }
+  </style>
+</head>
+<body class="bc">
+  <main class="bc-shell">
+    <!-- Topbar : titre + source + status pills + actions utilitaires -->
+    <header class="bc-topbar">
+      <input id="title" type="text" class="bc-input-inline" placeholder="Titre du live (facultatif)" maxlength="200">
+      <select id="src" class="bc-select-inline" aria-label="Source">
+        <option value="cam">Caméra + micro</option>
+        <option value="screen">Partage d'écran</option>
+        <option value="pip-screen-cam">PIP : écran + caméra</option>
+        <option value="pip-cam-screen">PIP : caméra + écran</option>
+      </select>
+      <span class="bc-topbar-spacer"></span>
+      <div class="bc-topbar-pills">
+        <span class="bc-pill rec" id="rec-pill" hidden><span class="bc-dot"></span><span id="rec-time">0:00</span></span>
+        <span class="bc-pill" id="viewers" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:12px;height:12px"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          <span id="viewers-n">0</span>
+        </span>
+        <span class="bc-pill q-HD" id="quality" hidden>HD</span>
+      </div>
+      <div class="bc-topbar-actions">
+        <button id="btn-share-copy" class="bc-iconbtn" hidden title="Copier le lien" aria-label="Copier le lien">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+        </button>
+        <button id="btn-share-open" class="bc-iconbtn" hidden title="Ouvrir la page live" aria-label="Ouvrir la page live">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- MAIN : stage hero + sidebar tabs -->
+    <div class="bc-main">
+      <!-- Colonne stage -->
+      <section class="bc-stage-col">
+        <div class="bc-stage" id="stage-wrap">
+          <video id="prev" autoplay muted playsinline></video>
+          <!-- Empty state quand pas encore démarré -->
+          <div class="bc-stage-empty" id="stage-empty">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
+            <h3>Prêt à diffuser</h3>
+            <p>Choisis ta source, donne (facultativement) un titre à ton live, puis clique sur <b>Démarrer</b> ci-dessous.</p>
+          </div>
+          <!-- PIP draggable (compositor mode) -->
+          <div id="pip-handle" class="pip-handle" title="Glisser pour déplacer">
+            <div id="pip-resize" class="pip-resize" title="Glisser pour redimensionner"></div>
+          </div>
+          <!-- Top overlay -->
+          <div class="bc-stage-top-overlay">
+            <span class="bc-pill rec" id="stage-rec" hidden><span class="bc-dot"></span>REC <span id="stage-time" style="margin-left:.25rem;font-family:var(--bc-mono)">0:00</span></span>
+            <span style="flex:1"></span>
+            <span class="bc-pill" id="stage-tier" hidden style="background:rgba(0,0,0,.55);color:#fff;border-color:transparent">HD</span>
+          </div>
+          <!-- Mic/Cam controls (persistent during live) -->
+          <div class="bc-stage-mc" id="mc-ctrls" hidden>
+            <button id="mic-toggle" class="bc-mc-btn" title="Couper le micro" aria-label="Couper le micro">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8"/></svg>
+            </button>
+            <button id="cam-toggle" class="bc-mc-btn" title="Couper la caméra" aria-label="Couper la caméra">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- Control bar -->
+        <div class="bc-controls">
+          <button id="toggle" class="bc-cta" data-state="idle">
+            <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            <span>Démarrer</span>
+          </button>
+          <button id="swap" class="bc-btn" hidden title="Inverser source principale et incrustation">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+            <span>Inverser</span>
+          </button>
+          <div class="bc-menu-wrap" id="layouts-wrap" hidden>
+            <button id="btn-layouts" class="bc-btn" title="Disposition PIP" aria-haspopup="menu" aria-expanded="false">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><rect x="13" y="13" width="6" height="6"/></svg>
+              <span>Disposition</span>
+            </button>
+            <div class="bc-menu" id="layouts" role="menu">
+              <div class="bc-menu-head">Disposition PIP</div>
+              <div class="bc-menu-grid">
+                <button class="lyt" data-layout="pip-br" title="PIP bas-droit"><span style="left:2px;top:2px;right:2px;bottom:2px"></span><span style="right:3px;bottom:3px;width:12px;height:8px"></span></button>
+                <button class="lyt" data-layout="pip-bl" title="PIP bas-gauche"><span style="left:2px;top:2px;right:2px;bottom:2px"></span><span style="left:3px;bottom:3px;width:12px;height:8px"></span></button>
+                <button class="lyt" data-layout="pip-tr" title="PIP haut-droit"><span style="left:2px;top:2px;right:2px;bottom:2px"></span><span style="right:3px;top:3px;width:12px;height:8px"></span></button>
+                <button class="lyt" data-layout="pip-tl" title="PIP haut-gauche"><span style="left:2px;top:2px;right:2px;bottom:2px"></span><span style="left:3px;top:3px;width:12px;height:8px"></span></button>
+                <button class="lyt" data-layout="split-h" title="Côte à côte"><span style="left:2px;top:2px;width:16px;bottom:2px"></span><span style="right:2px;top:2px;width:16px;bottom:2px"></span></button>
+                <button class="lyt" data-layout="split-v" title="Haut / bas"><span style="left:2px;top:2px;right:2px;height:9px"></span><span style="left:2px;bottom:2px;right:2px;height:9px"></span></button>
+              </div>
+            </div>
+          </div>
+          <div class="bc-menu-wrap" id="quality-wrap">
+            <button id="btn-quality" class="bc-btn" title="Qualité / résolution" aria-haspopup="menu" aria-expanded="false">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3 6 6 .8-4.5 4.3 1.1 6.4L12 16.7 6.4 19.5l1.1-6.4L3 8.8l6-.8z"/></svg>
+              <span>Qualité : <b id="btn-quality-label">AUTO</b></span>
+            </button>
+            <div class="bc-menu" id="quality-menu" role="menu">
+              <div class="bc-menu-head">Qualité de diffusion</div>
+              <div class="bc-menu-list">
+                <button class="qty on" data-preset="auto"><b>AUTO</b><small>ABR adaptive</small></button>
+                <button class="qty" data-preset="1080p"><b>1080p</b><small>1920×1080 · 30 fps</small></button>
+                <button class="qty" data-preset="720p"><b>720p</b><small>1280×720 · 30 fps</small></button>
+                <button class="qty" data-preset="480p"><b>480p</b><small>854×480 · 30 fps</small></button>
+                <button class="qty" data-preset="360p"><b>360p</b><small>640×360 · 24 fps</small></button>
+                <button class="qty" data-preset="audio"><b>Audio seulement</b><small>pas de vidéo</small></button>
+              </div>
+            </div>
+          </div>
+          <span class="sp"></span>
+          <span id="stat" style="color:var(--bc-muted);font-size:.78rem;font-family:var(--bc-mono)">En attente…</span>
+        </div>
+      </section>
+
+      <!-- Sidebar : Tabs Chat / Viewers / Stats -->
+      <aside class="bc-side">
+        <div class="bc-tabs" role="tablist">
+          <button class="bc-tab active" data-tab="chat" role="tab" aria-selected="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            Chat
+          </button>
+          <button class="bc-tab" data-tab="viewers" role="tab" aria-selected="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            Viewers <span class="bc-tab-badge" id="tab-viewers-badge" hidden>0</span>
+          </button>
+          <button class="bc-tab" data-tab="stats" role="tab" aria-selected="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+            Stats
+          </button>
+        </div>
+
+        <!-- Tab : Chat -->
+        <div class="bc-tab-panel active" data-tab="chat" role="tabpanel">
+          <div class="bc-chat-list" id="chat-list" aria-live="polite">
+            <div class="bc-empty-state">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              <div>Les messages des viewers apparaîtront ici.</div>
+            </div>
+          </div>
+          <div class="bc-chat-input">
+            <input id="chat-input" type="text" maxlength="400" placeholder="Écrire au chat…" disabled>
+            <button id="chat-send" class="bc-chat-send" disabled aria-label="Envoyer">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- Tab : Viewers -->
+        <div class="bc-tab-panel" data-tab="viewers" role="tabpanel">
+          <div class="bc-viewers-list" id="bc-peers">
+            <div class="bc-empty-state">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+              <div>Personne n'est encore connecté.</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab : Stats -->
+        <div class="bc-tab-panel" data-tab="stats" role="tabpanel">
+          <div class="bc-stats-body">
+            <div>
+              <div class="bc-stats-section-title">Flux sortant</div>
+              <div class="bc-stats-kv">
+                <div class="bc-stats-row"><b>bitrate</b><span id="bx-kbps">0 kbps</span></div>
+                <div class="bc-stats-row"><b>chunks émis</b><span id="bx-chunks">0</span></div>
+                <div class="bc-stats-row"><b>total émis</b><span id="bx-bytes">0 Ko</span></div>
+                <div class="bc-stats-row"><b>durée</b><span id="bx-elapsed">0 s</span></div>
+              </div>
+            </div>
+            <div>
+              <div class="bc-stats-section-title">Qualité (ABR)</div>
+              <div class="bc-stats-kv">
+                <div class="bc-stats-row"><b>tier courant</b><span id="bx-tier">—</span></div>
+                <div class="bc-stats-row"><b>epoch</b><span id="bx-epoch">0</span></div>
+              </div>
+            </div>
+            <div>
+              <div class="bc-stats-section-title">Journal</div>
+              <div class="bc-log" id="log" aria-live="polite"></div>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <div class="bc-toast" id="toast" role="status" aria-live="polite"><span id="toast-text"></span></div>
+  </main>
+
+  <script type="module">
+    import { generateStreamKey } from "/static/live/crypto.js";
+    import { Broadcaster } from "/static/live/broadcaster.js";
+    import { PipCompositor } from "/static/live/pip.js";
+
+    const $ = (id) => document.getElementById(id);
+    const prev = $("prev");
+    const pipHandle = $("pip-handle");
+    const pipResize = $("pip-resize");
+    const swapBtn = $("swap");
+    const layoutsWrap = $("layouts-wrap");
+    const btnLayouts = $("btn-layouts");
+    const layoutsMenu = $("layouts");
+    const layoutBtns = [...layoutsMenu.querySelectorAll(".lyt")];
+    const qualityWrap = $("quality-wrap");
+    const btnQuality = $("btn-quality");
+    const btnQualityLabel = $("btn-quality-label");
+    const qualityMenu = $("quality-menu");
+    const qualityBtns = [...qualityMenu.querySelectorAll(".qty")];
+    const stat = $("stat");
+    const stageEmpty = $("stage-empty");
+    const stageRec = $("stage-rec");
+    const stageTime = $("stage-time");
+    const stageTier = $("stage-tier");
+    const recPill = $("rec-pill");
+    const recTime = $("rec-time");
+    const mcCtrls = $("mc-ctrls");
+    const micBtn = $("mic-toggle");
+    const camBtn = $("cam-toggle");
+    const toggleBtn = $("toggle");
+    const viewersPill = $("viewers");
+    const viewersN = $("viewers-n");
+    const qualityPill = $("quality");
+    const titleInput = $("title");
+    const srcSelect = $("src");
+    const btnShareCopy = $("btn-share-copy");
+    const btnShareOpen = $("btn-share-open");
+    const chatList = $("chat-list");
+    const chatInput = $("chat-input");
+    const chatBtn = $("chat-send");
+    const log = $("log");
+    const peersBox = $("bc-peers");
+    const tabViewersBadge = $("tab-viewers-badge");
+    const toast = $("toast");
+    const toastText = $("toast-text");
+
+    const fmtBytesB = (n) => n < 1024 ? `${n} o` : n < 1024 * 1024 ? `${(n/1024).toFixed(1)} Ko` : `${(n/1024/1024).toFixed(2)} Mo`;
+    const fmtTime = (s) => { const m = Math.floor(s/60), r = s%60; return `${m}:${String(r).padStart(2,"0")}`; };
+
+    let liveUrl = null;
+    let chatHasContent = false;
+
+    const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    const appendChat = (msg, opts = {}) => {
+      if (!chatHasContent) { chatList.innerHTML = ""; chatHasContent = true; }
+      const row = document.createElement("div");
+      row.className = "chat-row" + (opts.host ? " host" : "");
+      const when = new Date(msg.ts || Date.now()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      row.innerHTML = `<b>${escapeHtml(msg.from || "?")}</b><span>${escapeHtml(msg.text || "")}</span><time>${when}</time>`;
+      chatList.appendChild(row);
+      chatList.scrollTop = chatList.scrollHeight;
+    };
+
+    const append = (m) => { log.textContent = (log.textContent + "\n" + m).split("\n").slice(-100).join("\n"); log.scrollTop = log.scrollHeight; };
+
+    let toastTimer = null;
+    const showToast = (msg, dur = 2200) => {
+      toastText.textContent = msg;
+      toast.dataset.show = "true";
+      if (toastTimer) clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => { toast.dataset.show = "false"; }, dur);
+    };
+
+    // Tabs wiring
+    document.querySelectorAll(".bc-tab").forEach((tab) => {
+      tab.addEventListener("click", () => {
+        const target = tab.dataset.tab;
+        document.querySelectorAll(".bc-tab").forEach((t) => {
+          const on = t === tab;
+          t.classList.toggle("active", on);
+          t.setAttribute("aria-selected", String(on));
+        });
+        document.querySelectorAll(".bc-tab-panel").forEach((p) => {
+          p.classList.toggle("active", p.dataset.tab === target);
+        });
+      });
+    });
+
+    // Dropdown layouts
+    btnLayouts.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const on = layoutsMenu.dataset.open !== "true";
+      layoutsMenu.dataset.open = String(on);
+      btnLayouts.setAttribute("aria-expanded", String(on));
+      // Ferme l'autre dropdown si ouvert.
+      qualityMenu.dataset.open = "false";
+      btnQuality.setAttribute("aria-expanded", "false");
+    });
+    document.addEventListener("click", (e) => {
+      if (!layoutsWrap.contains(e.target)) {
+        layoutsMenu.dataset.open = "false";
+        btnLayouts.setAttribute("aria-expanded", "false");
+      }
+      if (!qualityWrap.contains(e.target)) {
+        qualityMenu.dataset.open = "false";
+        btnQuality.setAttribute("aria-expanded", "false");
+      }
+    });
+
+    // Dropdown qualité (forcer une résolution / mode audio / AUTO)
+    const PRESET_LABELS = { auto: "AUTO", "1080p": "1080p", "720p": "720p", "480p": "480p", "360p": "360p", audio: "AUDIO" };
+    let currentPreset = "auto";
+    btnQuality.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const on = qualityMenu.dataset.open !== "true";
+      qualityMenu.dataset.open = String(on);
+      btnQuality.setAttribute("aria-expanded", String(on));
+      layoutsMenu.dataset.open = "false";
+      btnLayouts.setAttribute("aria-expanded", "false");
+    });
+    qualityBtns.forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const preset = btn.dataset.preset;
+        if (!preset || preset === currentPreset) return;
+        currentPreset = preset;
+        qualityBtns.forEach((b) => b.classList.toggle("on", b === btn));
+        btnQualityLabel.textContent = PRESET_LABELS[preset] || preset;
+        qualityMenu.dataset.open = "false";
+        btnQuality.setAttribute("aria-expanded", "false");
+        // Si le broadcaster n'est pas encore démarré, on stocke juste le choix
+        // (sera appliqué après bc.start() via le flush ci-dessous).
+        if (bc) await bc.setQualityPreset(preset);
+        showToast(preset === "auto" ? "Qualité : AUTO (adaptative)" : `Qualité forcée : ${PRESET_LABELS[preset]}`);
+      });
+    });
+
+    // Render diag → stats panel + viewers panel
+    const setStatsCell = (id, level) => {
+      const el = $(id); if (!el) return;
+      const row = el.parentElement;
+      row.classList.remove("good", "warn", "bad");
+      if (level) row.classList.add(level);
+    };
+    const renderBcDiag = (d) => {
+      if (!d) return;
+      $("bx-chunks").textContent = String(d.chunks);
+      $("bx-bytes").textContent = fmtBytesB(d.totalBytes);
+      $("bx-kbps").textContent = `${d.kbps} kbps`;
+      setStatsCell("bx-kbps", d.kbps < 200 ? "warn" : "good");
+      $("bx-elapsed").textContent = `${d.elapsedSec} s`;
+      $("bx-tier").textContent = d.qualityTier;
+      $("bx-epoch").textContent = String(d.epoch);
+      recTime.textContent = fmtTime(d.elapsedSec || 0);
+      stageTime.textContent = fmtTime(d.elapsedSec || 0);
+
+      tabViewersBadge.hidden = !d.peers.length;
+      tabViewersBadge.textContent = String(d.peers.length);
+
+      if (!d.peers.length) {
+        peersBox.innerHTML = `<div class="bc-empty-state">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+          <div>Personne n'est encore connecté.</div>
+        </div>`;
+        return;
+      }
+      peersBox.innerHTML = d.peers.map((p) => {
+        const okCh = p.channels === 3;
+        const congested = p.mediaBuf > 256 * 1024;
+        const rowCls = !okCh ? "warn" : (congested ? "bad" : "");
+        const handle = p.handle || null;
+        const initial = (handle || p.id)[0]?.toUpperCase() || "?";
+        const hue = [...(handle || p.id)].reduce((a, c) => (a * 31 + c.charCodeAt(0)) % 360, 0);
+        const av = (handle && p.hasPhoto)
+          ? `<img src="/api/identities/${encodeURIComponent(handle)}/photo" alt="" loading="lazy" onerror="this.parentElement.textContent='${initial}';this.parentElement.style.background='hsl(${hue} 40% 36%)'">`
+          : `<span style="background:hsl(${hue} 40% 36%);width:100%;height:100%;display:flex;align-items:center;justify-content:center">${initial}</span>`;
+        const handleEl = handle
+          ? `<a class="bc-vw-handle" href="/@${encodeURIComponent(handle)}" target="_blank" rel="noopener noreferrer">@${escapeHtml(handle)}</a>`
+          : `<span class="bc-vw-handle" style="color:var(--bc-muted)">anonyme · ${p.id}</span>`;
+        // Status icons : green dot if 3/3 channels + not congested
+        const statusColor = okCh && !congested ? "good" : (!okCh ? "warn" : "bad");
+        const statusLabel = okCh && !congested ? "Connecté" : (!okCh ? `${p.channels}/3 canaux` : "Congestion");
+        return `<div class="bc-viewer-card ${rowCls}">
+          <span class="bc-vw-av">${av}</span>
+          <div class="bc-vw-info">
+            ${handleEl}
+            <div class="bc-vw-meta">
+              <span class="${statusColor}">●</span>
+              <span>${statusLabel}</span>
+              <span class="bc-vw-meta-sep"></span>
+              <span title="Connexion WebRTC">${p.conn}</span>
+            </div>
+          </div>
+          <span class="bc-vw-status" style="color:var(--bc-muted);font-family:var(--bc-mono)">${fmtBytesB(p.mediaBuf)}</span>
+        </div>`;
+      }).join("");
+    };
+
+    // device_id par onglet
+    const DK = "live_device_id";
+    let deviceId = sessionStorage.getItem(DK);
+    if (!deviceId) { deviceId = crypto.randomUUID(); sessionStorage.setItem(DK, deviceId); }
+
+    let me = null;
+    try { const r = await fetch("/api/me", { credentials: "include" }); if (r.ok) me = await r.json(); } catch {}
+    const hostHandle = me?.handle ? ("@" + me.handle + " (live)") : "host";
+
+    let bc = null;
+    let compositor = null;
+    let currentStream = null;
+    const TIER_SIZES = { HD: [1280, 720], SD: [854, 480], LD: [640, 360], POTATO: [426, 240] };
+
+    const setBtn = (state) => {
+      toggleBtn.dataset.state = state;
+      if (state === "idle") {
+        toggleBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg><span>Démarrer</span>';
+        toggleBtn.className = "bc-cta";
+        toggleBtn.disabled = false;
+        mcCtrls.hidden = true;
+        recPill.hidden = true;
+        stageRec.hidden = true;
+        stageTier.hidden = true;
+        titleInput.disabled = false;
+        srcSelect.disabled = false;
+        btnShareCopy.hidden = true;
+        btnShareOpen.hidden = true;
+        viewersPill.hidden = true;
+        qualityPill.hidden = true;
+        stageEmpty.style.display = "";
+      } else if (state === "live") {
+        toggleBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12"/></svg><span>Arrêter</span>';
+        toggleBtn.className = "bc-cta stop";
+        toggleBtn.disabled = false;
+        mcCtrls.hidden = false;
+        recPill.hidden = false;
+        stageRec.hidden = false;
+        stageTier.hidden = false;
+        titleInput.disabled = true;
+        srcSelect.disabled = true;
+        btnShareCopy.hidden = false;
+        btnShareOpen.hidden = false;
+        stageEmpty.style.display = "none";
+      } else if (state === "busy") {
+        toggleBtn.disabled = true;
+      }
+    };
+
+    async function getCam() {
+      return navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+        audio: { echoCancellation: true, noiseSuppression: true },
+      });
+    }
+    async function getScreen() {
+      const s = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 24 }, audio: true });
+      if (!s.getAudioTracks().length) {
+        try {
+          const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+          mic.getAudioTracks().forEach((t) => s.addTrack(t));
+        } catch {}
+      }
+      return s;
+    }
+    async function captureMedia(kind) {
+      if (kind === "cam") return { stream: await getCam() };
+      if (kind === "screen") return { stream: await getScreen() };
+      const camMain = kind === "pip-cam-screen";
+      append("Capture caméra…");
+      const cam = await getCam();
+      append("Capture écran…");
+      const screen = await getScreen();
+      const mainStream = camMain ? cam : screen;
+      const pipStream = camMain ? screen : cam;
+      const comp = new PipCompositor({ mainStream, pipStream, onLog: append });
+      comp.start();
+      return { stream: comp.outputStream, compositor: comp };
+    }
+
+    async function ensureEcdhKeyPair() {
+      const kp = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveKey", "deriveBits"]);
+      kp.privateKey._publicKey = kp.publicKey;
+      return kp;
+    }
+
+    async function startLive() {
+      setBtn("busy");
+      try {
+        const kind = srcSelect.value;
+        const { stream, compositor: comp } = await captureMedia(kind);
+        compositor = comp || null;
+        currentStream = stream;
+        prev.srcObject = stream;
+        if (compositor) {
+          pipHandle.classList.add("active");
+          swapBtn.hidden = false;
+          layoutsWrap.hidden = false;
+          markLayoutSelected("pip-br");
+          requestAnimationFrame(syncPipHandle);
+        } else {
+          pipHandle.classList.remove("active");
+          swapBtn.hidden = true;
+          layoutsWrap.hidden = true;
+        }
+        // Reset mic/cam visual state
+        micBtn.classList.remove("off"); camBtn.classList.remove("off");
+        micBtn.hidden = !currentStream.getAudioTracks?.()[0];
+        camBtn.hidden = !currentStream.getVideoTracks?.()[0];
+
+        const key = await generateStreamKey();
+        const kp = await ensureEcdhKeyPair();
+        bc = new Broadcaster({
+          stream, key, deviceId,
+          broadcasterEcdhPriv: kp.privateKey,
+          onState: (s) => {
+            if (s.diag) renderBcDiag(s.diag);
+            if (s.phase === "live") {
+              stat.textContent = `Diffusion en cours · chunk #${s.chunk ?? 0}`;
+              liveUrl = `${location.origin}/live/${s.streamId}`;
+              if (typeof s.viewers === "number") {
+                viewersPill.hidden = false;
+                viewersN.textContent = String(s.viewers);
+              }
+              if (s.quality) {
+                qualityPill.hidden = false;
+                qualityPill.textContent = s.quality;
+                qualityPill.className = "bc-pill q-" + s.quality;
+                stageTier.textContent = s.quality;
+                const sz = TIER_SIZES[s.quality];
+                if (compositor && sz) compositor.setOutputSize(sz[0], sz[1]);
+              }
+              chatInput.disabled = false; chatBtn.disabled = false;
+            } else if (s.phase === "ended") {
+              stat.textContent = "Terminé";
+              chatInput.disabled = true; chatBtn.disabled = true;
+              setBtn("idle");
+            }
+          },
+          onLog: append,
+          onChat: (msg) => appendChat(msg, { host: msg.from === hostHandle }),
+        });
+        await bc.start({ title: titleInput.value });
+        // Si l'utilisateur a choisi un preset avant de démarrer, on l'applique.
+        if (currentPreset && currentPreset !== "auto") {
+          await bc.setQualityPreset(currentPreset);
+        }
+        setBtn("live");
+        showToast("Live démarré 🔴");
+      } catch (e) {
+        append("Erreur: " + (e?.message || e));
+        showToast("Erreur : " + (e?.message || "démarrage impossible"), 4000);
+        compositor?.stop(); compositor = null;
+        pipHandle.classList.remove("active");
+        swapBtn.hidden = true;
+        layoutsWrap.hidden = true;
+        setBtn("idle");
+      }
+    }
+
+    async function stopLive() {
+      setBtn("busy");
+      await bc?.stop();
+      compositor?.stop(); compositor = null;
+      pipHandle.classList.remove("active");
+      swapBtn.hidden = true;
+      layoutsWrap.hidden = true;
+      showToast("Live arrêté");
+    }
+
+    function markLayoutSelected(name) {
+      layoutBtns.forEach((b) => b.classList.toggle("on", b.dataset.layout === name));
+    }
+    function syncPipHandle() {
+      if (!compositor) return;
+      const { x, y, w, h } = compositor.pipLayout;
+      pipHandle.style.left = (x * 100) + "%";
+      pipHandle.style.top = (y * 100) + "%";
+      pipHandle.style.width = (w * 100) + "%";
+      pipHandle.style.height = (h * 100) + "%";
+    }
+
+    // PIP drag handlers
+    let pipDrag = null;
+    pipHandle.addEventListener("pointerdown", (e) => {
+      if (!compositor) return;
+      e.preventDefault();
+      try { pipHandle.setPointerCapture(e.pointerId); } catch {}
+      const r = prev.getBoundingClientRect();
+      pipDrag = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY,
+        startLX: compositor.pipLayout.x, startLY: compositor.pipLayout.y, rectW: r.width, rectH: r.height };
+    });
+    pipHandle.addEventListener("pointermove", (e) => {
+      if (!pipDrag || e.pointerId !== pipDrag.pointerId) return;
+      const dx = (e.clientX - pipDrag.startX) / pipDrag.rectW;
+      const dy = (e.clientY - pipDrag.startY) / pipDrag.rectH;
+      compositor.setPipLayout({ x: pipDrag.startLX + dx, y: pipDrag.startLY + dy });
+      syncPipHandle();
+    });
+    const endDrag = (e) => { if (pipDrag && e.pointerId === pipDrag.pointerId) { try { pipHandle.releasePointerCapture(e.pointerId); } catch {} pipDrag = null; } };
+    pipHandle.addEventListener("pointerup", endDrag);
+    pipHandle.addEventListener("pointercancel", endDrag);
+
+    swapBtn.onclick = () => { compositor?.swap(); };
+
+    let pipResz = null;
+    pipResize.addEventListener("pointerdown", (e) => {
+      if (!compositor) return;
+      e.preventDefault(); e.stopPropagation();
+      try { pipResize.setPointerCapture(e.pointerId); } catch {}
+      const r = prev.getBoundingClientRect();
+      pipResz = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY,
+        startW: compositor.pipLayout.w, startH: compositor.pipLayout.h, rectW: r.width, rectH: r.height };
+    });
+    pipResize.addEventListener("pointermove", (e) => {
+      if (!pipResz || e.pointerId !== pipResz.pointerId) return;
+      const dw = (e.clientX - pipResz.startX) / pipResz.rectW;
+      const dh = (e.clientY - pipResz.startY) / pipResz.rectH;
+      compositor.setPipLayout({ w: pipResz.startW + dw, h: pipResz.startH + dh });
+      syncPipHandle();
+    });
+    const endResize = (e) => { if (pipResz && e.pointerId === pipResz.pointerId) { try { pipResize.releasePointerCapture(e.pointerId); } catch {} pipResz = null; } };
+    pipResize.addEventListener("pointerup", endResize);
+    pipResize.addEventListener("pointercancel", endResize);
+
+    layoutBtns.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        if (!compositor) return;
+        compositor.setLayout(btn.dataset.layout);
+        markLayoutSelected(btn.dataset.layout);
+        syncPipHandle();
+        layoutsMenu.dataset.open = "false";
+        btnLayouts.setAttribute("aria-expanded", "false");
+      });
+    });
+
+    toggleBtn.onclick = () => {
+      const st = toggleBtn.dataset.state;
+      if (st === "idle") startLive();
+      else if (st === "live") stopLive();
+    };
+
+    // Mic / Cam toggle
+    micBtn.onclick = () => {
+      const tracks = currentStream?.getAudioTracks?.() || [];
+      if (!tracks.length) return;
+      const next = !tracks[0].enabled;
+      tracks.forEach((t) => t.enabled = next);
+      micBtn.classList.toggle("off", !next);
+      showToast(next ? "Micro activé" : "Micro coupé");
+    };
+    camBtn.onclick = () => {
+      const tracks = currentStream?.getVideoTracks?.() || [];
+      if (!tracks.length) return;
+      const next = !tracks[0].enabled;
+      tracks.forEach((t) => t.enabled = next);
+      camBtn.classList.toggle("off", !next);
+      showToast(next ? "Caméra activée" : "Caméra coupée");
+    };
+
+    // Share actions
+    btnShareCopy.onclick = async () => {
+      if (!liveUrl) return;
+      try { await navigator.clipboard.writeText(liveUrl); showToast("Lien copié ✓"); }
+      catch { showToast("Copie impossible", 3000); }
+    };
+    btnShareOpen.onclick = () => { if (liveUrl) window.open(liveUrl, "_blank", "noopener,noreferrer"); };
+
+    const sendChat = () => {
+      const t = chatInput.value.trim();
+      if (!t || !bc) return;
+      bc.publishChat(t, hostHandle);
+      chatInput.value = "";
+    };
+    chatBtn.onclick = sendChat;
+    chatInput.addEventListener("keydown", (e) => { if (e.key === "Enter") sendChat(); });
+
+    window.addEventListener("beforeunload", () => { bc?.stop(); });
+  </script>
+</body>
+</html>

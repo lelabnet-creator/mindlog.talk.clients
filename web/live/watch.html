@@ -1,0 +1,662 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Live — mindlog · id</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" href="/static/milo.svg">
+  <style>
+    /* ── Tokens (Dark Mode OLED, Video-First Hero) ─────────────────────────── */
+    .lv {
+      --lv-bg: #0a0a12;
+      --lv-surface: #16161f;
+      --lv-surface-2: #1f1f2a;
+      --lv-border: #2a2a37;
+      --lv-text: #e4e4ef;
+      --lv-muted: #8a8a99;
+      --lv-accent: #e11d48;
+      --lv-accent-soft: rgba(225,29,72,.15);
+      --lv-success: #22c55e;
+      --lv-warn: #f59e0b;
+      --lv-danger: #ef4444;
+      --lv-radius: 12px;
+      --lv-radius-sm: 8px;
+      --lv-shadow-lg: 0 12px 32px rgba(0,0,0,.35), 0 2px 4px rgba(0,0,0,.5);
+      --lv-font: 'Inter', ui-sans-serif, system-ui, sans-serif;
+      --lv-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    /* ── Page shell — pleine hauteur, le grid remplit l'espace.
+       align-items:stretch annule le centrage horizontal hérité du `body {
+       align-items: center }` global qui limitait la largeur du <main> à
+       son contenu intrinsèque. ────────────────────────────────────────── */
+    .lv {
+      background: var(--lv-bg);
+      color: var(--lv-text);
+      height: 100dvh; width: 100%;
+      font-family: var(--lv-font);
+      padding: 1rem clamp(.75rem, 1.5vw, 1.25rem);
+      display: flex; flex-direction: column;
+      align-items: stretch;
+      overflow: hidden;
+      box-sizing: border-box;
+    }
+    .lv-shell {
+      flex: 1; min-height: 0; width: 100%;
+      display: flex; flex-direction: column;
+      gap: .75rem;
+    }
+
+    /* Header */
+    .lv-header {
+      display: flex; align-items: center; gap: 1rem;
+      flex-wrap: wrap;
+      flex: none;
+    }
+    .lv-title { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .15rem; }
+    .lv-title-line { display: flex; align-items: center; gap: .55rem; }
+    .lv-title h1 {
+      font-size: 1.25rem; font-weight: 700; margin: 0; color: var(--lv-text);
+      letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .lv-handle { color: var(--lv-muted); font-size: .85rem; }
+    .lv-actions { display: flex; gap: .4rem; align-items: center; }
+
+    /* Pills */
+    .lv-pill {
+      display: inline-flex; align-items: center; gap: .35rem;
+      padding: .25rem .6rem; border-radius: 999px;
+      background: var(--lv-surface-2); color: var(--lv-text);
+      font-size: .73rem; font-weight: 600; letter-spacing: .02em;
+      border: 1px solid var(--lv-border);
+    }
+    .lv-pill .lv-dot { width: .4rem; height: .4rem; border-radius: 50%; background: var(--lv-muted); }
+    .lv-pill.live { background: var(--lv-accent-soft); color: var(--lv-accent); border-color: transparent; }
+    .lv-pill.live .lv-dot { background: var(--lv-accent); box-shadow: 0 0 8px var(--lv-accent); animation: lv-pulse 1.4s infinite; }
+    .lv-pill.warn { color: var(--lv-warn); border-color: rgba(245,158,11,.35); }
+    .lv-pill.muted { color: var(--lv-muted); }
+    @keyframes lv-pulse { 0%,100%{opacity:1;} 50%{opacity:.4;} }
+
+    /* Icon buttons */
+    .lv-iconbtn {
+      width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center;
+      background: transparent; color: var(--lv-text); border: 1px solid var(--lv-border);
+      border-radius: var(--lv-radius-sm); cursor: pointer; transition: background .15s, color .15s, border-color .15s;
+    }
+    .lv-iconbtn:hover { background: var(--lv-surface-2); border-color: var(--lv-muted); }
+    .lv-iconbtn:focus-visible { outline: 2px solid var(--lv-accent); outline-offset: 2px; }
+    .lv-iconbtn svg { width: 18px; height: 18px; }
+
+    /* Grid : stage 1fr + chat 360px en desktop ; pleine hauteur restante */
+    .lv-grid {
+      display: grid; gap: .85rem;
+      grid-template-columns: 1fr;
+      flex: 1; min-height: 0;
+    }
+    @media (min-width: 1024px) {
+      .lv-grid { grid-template-columns: minmax(0, 1fr) 360px; }
+    }
+    .lv-grid[data-theater="true"] { grid-template-columns: 1fr; }
+
+    /* Stage column — la stage prend toute la place qu'il reste après meta/diag */
+    .lv-stage-col {
+      display: grid;
+      grid-template-rows: minmax(0, 1fr) auto auto;
+      gap: .65rem; min-width: 0; min-height: 0;
+    }
+
+    /* Video stage : remplit le 1fr disponible, object-fit:contain garde l'aspect */
+    .lv-stage {
+      position: relative;
+      background: #000;
+      border-radius: var(--lv-radius);
+      overflow: hidden;
+      min-height: 0;
+      box-shadow: var(--lv-shadow-lg);
+    }
+    .lv-stage video {
+      width: 100%; height: 100%; display: block; background: #000;
+      object-fit: contain;
+    }
+    /* Top overlay : live dot + quality pill, top-left */
+    .lv-stage-top {
+      position: absolute; top: .75rem; left: .75rem; right: .75rem;
+      display: flex; align-items: center; justify-content: space-between; gap: .5rem;
+      pointer-events: none;
+    }
+    .lv-stage-top > * { pointer-events: auto; }
+    /* Bottom controls overlay — apparaît au survol */
+    .lv-stage-bottom {
+      position: absolute; left: 0; right: 0; bottom: 0;
+      padding: .75rem;
+      display: flex; gap: .5rem; align-items: center;
+      background: linear-gradient(to top, rgba(0,0,0,.7), transparent);
+      opacity: 0; transition: opacity .2s;
+    }
+    .lv-stage:hover .lv-stage-bottom,
+    .lv-stage:focus-within .lv-stage-bottom,
+    .lv-stage[data-controls-pinned="true"] .lv-stage-bottom { opacity: 1; }
+    .lv-ctrl-btn {
+      width: 38px; height: 38px;
+      background: rgba(0,0,0,.55); color: #fff; border: 0;
+      border-radius: 50%; cursor: pointer; backdrop-filter: blur(8px);
+      display: inline-flex; align-items: center; justify-content: center;
+      transition: background .15s, transform .15s;
+    }
+    .lv-ctrl-btn:hover { background: rgba(0,0,0,.8); transform: scale(1.05); }
+    .lv-ctrl-btn svg { width: 18px; height: 18px; }
+    .lv-vol-slider {
+      width: 0; opacity: 0; transition: width .2s, opacity .2s;
+      accent-color: var(--lv-accent);
+    }
+    .lv-stage:hover .lv-vol-slider,
+    .lv-stage:focus-within .lv-vol-slider { width: 90px; opacity: 1; }
+    .lv-stage-spacer { flex: 1; }
+    .lv-latency-badge {
+      color: rgba(255,255,255,.85); font-family: var(--lv-mono); font-size: .72rem;
+      background: rgba(0,0,0,.55); padding: .2rem .55rem; border-radius: 999px;
+      backdrop-filter: blur(4px);
+    }
+    /* Big unmute CTA — affiché tant que mute */
+    .lv-unmute-cta {
+      position: absolute; right: .85rem; top: .85rem;
+      display: inline-flex; align-items: center; gap: .35rem;
+      padding: .5rem .85rem; border-radius: 999px; border: 0;
+      background: rgba(0,0,0,.7); color: #fff; cursor: pointer;
+      font-size: .85rem; font-weight: 600; backdrop-filter: blur(8px);
+      transition: background .15s, transform .15s;
+    }
+    .lv-unmute-cta:hover { background: rgba(0,0,0,.9); transform: scale(1.03); }
+    .lv-unmute-cta[hidden] { display: none; }
+    .lv-unmute-cta svg { width: 16px; height: 16px; }
+
+    /* Meta strip */
+    .lv-meta {
+      display: flex; gap: .5rem; align-items: center; flex-wrap: wrap;
+      color: var(--lv-muted); font-size: .85rem;
+    }
+    .lv-meta .lv-pill { font-size: .73rem; }
+    .lv-meta-sep { width: 1px; height: 14px; background: var(--lv-border); }
+
+    /* Diagnostics collapsible */
+    details.lv-diag {
+      background: var(--lv-surface);
+      border: 1px solid var(--lv-border);
+      border-radius: var(--lv-radius);
+      padding: 0;
+    }
+    details.lv-diag > summary {
+      list-style: none;
+      cursor: pointer;
+      padding: .75rem 1rem;
+      display: flex; align-items: center; gap: .5rem;
+      font-size: .82rem; color: var(--lv-muted);
+      user-select: none;
+    }
+    details.lv-diag > summary::-webkit-details-marker { display: none; }
+    details.lv-diag > summary::before {
+      content: "›";
+      transition: transform .15s;
+      font-size: 1.1rem; line-height: 1; color: var(--lv-muted);
+    }
+    details.lv-diag[open] > summary::before { transform: rotate(90deg); }
+    details.lv-diag > summary:hover { color: var(--lv-text); }
+    .lv-diag-body {
+      padding: 0 1rem 1rem;
+      display: grid; gap: .4rem .75rem;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      font-family: var(--lv-mono); font-size: 11.5px;
+      border-top: 1px solid var(--lv-border);
+      margin-top: -.5rem;
+      padding-top: .75rem;
+    }
+    .lv-diag-cell { display: flex; gap: .3rem; align-items: baseline; min-width: 0; }
+    .lv-diag-cell b { font-weight: 600; opacity: .55; text-transform: uppercase; font-size: 9.5px; letter-spacing: .04em; color: var(--lv-muted); }
+    .lv-diag-cell span { font-weight: 600; color: var(--lv-text); }
+    .lv-diag-cell.warn span { color: var(--lv-warn); }
+    .lv-diag-cell.bad  span { color: var(--lv-danger); }
+    .lv-diag-cell.good span { color: var(--lv-success); }
+
+    /* Chat sidebar — remplit toute la hauteur du grid (= même hauteur que la stage column) */
+    .lv-chat {
+      display: flex; flex-direction: column;
+      background: var(--lv-surface); border: 1px solid var(--lv-border);
+      border-radius: var(--lv-radius);
+      min-height: 0; height: 100%;
+      overflow: hidden;
+    }
+    .lv-chat-head {
+      padding: .75rem 1rem; border-bottom: 1px solid var(--lv-border);
+      display: flex; align-items: center; gap: .5rem;
+      font-size: .85rem; font-weight: 600;
+    }
+    .lv-chat-head svg { width: 16px; height: 16px; opacity: .7; }
+    .lv-chat-head-count { margin-left: auto; color: var(--lv-muted); font-weight: 500; font-size: .8rem; }
+    .lv-chat-list {
+      flex: 1; min-height: 0; overflow-y: auto;
+      padding: .75rem; display: flex; flex-direction: column; gap: .55rem;
+      font-size: .9rem;
+    }
+    .lv-chat-list .chat-row { display: flex; gap: .35rem; flex-wrap: wrap; align-items: baseline; line-height: 1.45; }
+    .lv-chat-list .chat-row b { color: #60a5fa; font-weight: 600; font-size: .85rem; }
+    .lv-chat-list .chat-row time { color: var(--lv-muted); font-size: .7rem; margin-left: auto; }
+    .lv-chat-empty {
+      text-align: center; padding: 2rem 1rem;
+      color: var(--lv-muted); font-size: .82rem;
+    }
+    .lv-chat-empty svg { width: 28px; height: 28px; opacity: .4; margin-bottom: .5rem; }
+    .lv-chat-input {
+      display: flex; gap: .4rem; padding: .65rem;
+      border-top: 1px solid var(--lv-border);
+      background: var(--lv-surface-2);
+    }
+    .lv-chat-input input {
+      flex: 1; min-width: 0;
+      background: var(--lv-bg); color: var(--lv-text);
+      border: 1px solid var(--lv-border); border-radius: var(--lv-radius-sm);
+      padding: .5rem .65rem; font: inherit; font-size: .88rem;
+      transition: border-color .15s;
+    }
+    .lv-chat-input input:focus {
+      outline: none; border-color: var(--lv-accent);
+    }
+    .lv-chat-input input:disabled { opacity: .5; cursor: not-allowed; }
+    .lv-chat-send {
+      background: var(--lv-accent); color: #fff; border: 0;
+      border-radius: var(--lv-radius-sm); padding: 0 .85rem;
+      cursor: pointer; font: inherit; font-weight: 600;
+      transition: background .15s, transform .15s;
+    }
+    .lv-chat-send:hover:not(:disabled) { background: #be123c; transform: scale(1.03); }
+    .lv-chat-send:disabled { opacity: .5; cursor: not-allowed; }
+    .lv-chat-send svg { width: 14px; height: 14px; }
+
+    /* Paywall */
+    .lv-paywall {
+      padding: 2rem; text-align: center;
+      background: var(--lv-surface); border: 1px solid var(--lv-border);
+      border-radius: var(--lv-radius);
+    }
+    .lv-paywall h2 { margin-top: 0; }
+    .lv-paywall .btn { background: var(--lv-accent); color: #fff; border: 0; padding: .65rem 1.2rem; border-radius: var(--lv-radius-sm); font-weight: 600; }
+
+    /* Toast (reconnexion) */
+    .lv-toast {
+      position: fixed; bottom: 1.25rem; left: 50%; transform: translateX(-50%);
+      background: var(--lv-surface); color: var(--lv-text);
+      padding: .6rem 1rem; border-radius: 999px; border: 1px solid var(--lv-border);
+      font-size: .85rem; box-shadow: var(--lv-shadow-lg);
+      display: flex; align-items: center; gap: .5rem;
+      z-index: 50; opacity: 0; pointer-events: none; transition: opacity .25s, transform .25s;
+    }
+    .lv-toast[data-show="true"] { opacity: 1; transform: translateX(-50%) translateY(0); pointer-events: auto; }
+
+    @media (max-width: 1023px) {
+      /* En mobile/tablette le layout passe en colonne unique : on retire la
+         hauteur 100dvh stricte pour laisser le contenu scroller naturellement. */
+      .lv { height: auto; min-height: 100dvh; overflow: visible; }
+      .lv-shell { flex: none; }
+      .lv-grid { flex: none; }
+      .lv-stage-col { display: flex; flex-direction: column; }
+      .lv-stage { aspect-ratio: 16/9; }
+      .lv-chat { height: auto; min-height: 380px; max-height: 60vh; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .lv-pill.live .lv-dot { animation: none; }
+      .lv-ctrl-btn, .lv-unmute-cta, .lv-chat-send { transition: none; }
+    }
+  </style>
+</head>
+<body class="lv">
+  <main class="lv-shell">
+    <!-- Paywall (caché en lecture normale) -->
+    <div id="paywall" hidden class="lv-paywall">
+      <h2>🔒 Live réservé aux abonné·e·s</h2>
+      <p style="color:var(--lv-muted)">Cette diffusion est réservée aux abonné·e·s de cet espace Premium.</p>
+      <p><a id="sub-link" class="btn" href="#">S'abonner</a></p>
+    </div>
+
+    <!-- Header -->
+    <header class="lv-header" id="header">
+      <div class="lv-title">
+        <div class="lv-title-line">
+          <span class="lv-pill live" id="status-pill"><span class="lv-dot" id="dot"></span><span id="status">Connexion…</span></span>
+          <h1 id="title">Live</h1>
+        </div>
+        <div class="lv-handle" id="handle"></div>
+      </div>
+      <div class="lv-actions">
+        <button type="button" id="btn-copy" class="lv-iconbtn" title="Copier le lien" aria-label="Copier le lien">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+        </button>
+        <button type="button" id="btn-theater" class="lv-iconbtn" title="Mode théâtre" aria-label="Mode théâtre" aria-pressed="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="6" width="18" height="12" rx="2"/></svg>
+        </button>
+        <button type="button" id="btn-fs" class="lv-iconbtn" title="Plein écran" aria-label="Plein écran">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9V5a2 2 0 0 1 2-2h4M21 9V5a2 2 0 0 0-2-2h-4M3 15v4a2 2 0 0 0 2 2h4M21 15v4a2 2 0 0 1-2 2h-4"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Grid -->
+    <div id="grid" class="lv-grid" data-theater="false">
+      <!-- Stage column -->
+      <section class="lv-stage-col">
+        <div class="lv-stage" id="stage-wrap">
+          <video id="stage" autoplay playsinline muted disablepictureinpicture></video>
+          <!-- Top-left overlay : live dot + quality -->
+          <div class="lv-stage-top">
+            <span class="lv-pill live" style="background:rgba(225,29,72,.85);color:#fff"><span class="lv-dot" style="background:#fff;box-shadow:0 0 6px #fff"></span>EN DIRECT</span>
+            <span class="lv-pill" id="quality" style="background:rgba(0,0,0,.55);color:#fff;border-color:transparent">qualité —</span>
+          </div>
+          <!-- Big unmute (apparaît tant que muted) -->
+          <button type="button" id="unmute" class="lv-unmute-cta" hidden aria-label="Activer le son">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
+            Activer le son
+          </button>
+          <!-- Bottom controls overlay -->
+          <div class="lv-stage-bottom">
+            <button type="button" id="ctrl-mute" class="lv-ctrl-btn" aria-label="Sourdine">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
+            </button>
+            <input type="range" id="ctrl-vol" class="lv-vol-slider" min="0" max="1" step="0.05" value="1" aria-label="Volume">
+            <span class="lv-stage-spacer"></span>
+            <span class="lv-latency-badge" id="latency">— s</span>
+            <button type="button" id="ctrl-fs" class="lv-ctrl-btn" aria-label="Plein écran">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9V5a2 2 0 0 1 2-2h4M21 9V5a2 2 0 0 0-2-2h-4M3 15v4a2 2 0 0 0 2 2h4M21 15v4a2 2 0 0 1-2 2h-4"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- Meta strip (sous la vidéo) -->
+        <div class="lv-meta" id="meta-strip">
+          <span class="lv-pill" id="peers"><span class="lv-dot"></span>0 pair</span>
+          <span class="lv-meta-sep"></span>
+          <span id="started" style="color:var(--lv-muted);font-size:.8rem">—</span>
+        </div>
+
+        <!-- Diagnostics — collapsed par défaut -->
+        <details class="lv-diag" id="diag">
+          <summary>Diagnostics techniques</summary>
+          <div class="lv-diag-body">
+            <div class="lv-diag-cell"><b>buffer lecture</b><span id="st-buf">— s</span></div>
+            <div class="lv-diag-cell"><b>cache chunks</b><span id="st-chunks">0</span></div>
+            <div class="lv-diag-cell"><b>cache taille</b><span id="st-bytes">0 Ko</span></div>
+            <div class="lv-diag-cell"><b>cache durée</b><span id="st-span">— s</span></div>
+            <div class="lv-diag-cell"><b>init</b><span id="st-init">non</span></div>
+            <div class="lv-diag-cell"><b>chunk #</b><span id="st-last">—</span></div>
+            <div class="lv-diag-cell"><b>clé</b><span id="st-key">non</span></div>
+            <div class="lv-diag-cell"><b>broadcaster</b><span id="st-bc">—</span></div>
+            <div class="lv-diag-cell"><b>peer conn</b><span id="st-pc">—</span></div>
+            <div class="lv-diag-cell"><b>peer ice</b><span id="st-ice">—</span></div>
+            <div class="lv-diag-cell"><b>canaux ouverts</b><span id="st-ch">0/3</span></div>
+            <div class="lv-diag-cell"><b>dernier signal</b><span id="st-sig">—</span></div>
+            <div class="lv-diag-cell"><b>join-req</b><span id="st-jr">0</span></div>
+            <div class="lv-diag-cell"><b>fallback</b><span id="st-fb">0</span></div>
+          </div>
+        </details>
+      </section>
+
+      <!-- Chat sidebar -->
+      <aside class="lv-chat" id="chat-aside">
+        <div class="lv-chat-head">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          Chat
+          <span class="lv-chat-head-count" id="chat-count"></span>
+        </div>
+        <div class="lv-chat-list" id="chat-list" aria-live="polite">
+          <div class="lv-chat-empty" id="chat-empty">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            <div>Personne n'a encore écrit. Lance la conversation !</div>
+          </div>
+        </div>
+        <div class="lv-chat-input">
+          <input id="chat-input" type="text" maxlength="400" placeholder="Écrire au chat…" disabled>
+          <button id="chat-send" class="lv-chat-send" disabled aria-label="Envoyer">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+          </button>
+        </div>
+      </aside>
+    </div>
+
+    <!-- Toast (reconnexion / état) -->
+    <div class="lv-toast" id="toast" role="status" aria-live="polite">
+      <span id="toast-text"></span>
+    </div>
+  </main>
+
+  <script type="module">
+    import { Viewer } from "/static/live/viewer.js";
+
+    const streamId = location.pathname.match(/^\/live\/([A-Za-z0-9-]+)/)?.[1];
+    if (!streamId) { document.body.innerHTML = "<main style='padding:2rem;color:#e4e4ef;background:#0a0a12;min-height:100vh'><p>Live introuvable.</p></main>"; throw new Error("no stream id"); }
+
+    const $ = (id) => document.getElementById(id);
+    const stage = $("stage");
+    const stageWrap = $("stage-wrap");
+    const dot = $("dot");
+    const status = $("status");
+    const titleEl = $("title");
+    const handleEl = $("handle");
+    const quality = $("quality");
+    const peers = $("peers");
+    const startedEl = $("started");
+    const chatList = $("chat-list");
+    const chatEmpty = $("chat-empty");
+    const chatCount = $("chat-count");
+    const chatInput = $("chat-input");
+    const chatBtn = $("chat-send");
+    const paywall = $("paywall");
+    const grid = $("grid");
+    const unmuteBtn = $("unmute");
+    const ctrlMute = $("ctrl-mute");
+    const ctrlVol = $("ctrl-vol");
+    const ctrlFs = $("ctrl-fs");
+    const btnTheater = $("btn-theater");
+    const btnFs = $("btn-fs");
+    const btnCopy = $("btn-copy");
+    const latencyEl = $("latency");
+    const toast = $("toast");
+    const toastText = $("toast-text");
+    const stBuf = $("st-buf"), stChunks = $("st-chunks"), stBytes = $("st-bytes"),
+          stSpan = $("st-span"), stInit = $("st-init"), stLast = $("st-last"),
+          stKey = $("st-key"), stBc = $("st-bc"), stPc = $("st-pc"), stIce = $("st-ice"),
+          stCh = $("st-ch"), stSig = $("st-sig"), stJr = $("st-jr"), stFb = $("st-fb");
+
+    const fmtBytes = (n) => n < 1024 ? `${n} o` : n < 1024 * 1024 ? `${(n/1024).toFixed(1)} Ko` : `${(n/1024/1024).toFixed(2)} Mo`;
+    const setCell = (el, level) => {
+      const cell = el.parentElement;
+      cell.classList.remove("good", "warn", "bad");
+      if (level) cell.classList.add(level);
+    };
+    const fmtAgo = (iso) => {
+      if (!iso) return "—";
+      const d = Date.now() - new Date(iso).getTime();
+      const m = Math.floor(d / 60000);
+      if (m < 1) return "à l'instant";
+      if (m < 60) return `démarré il y a ${m} min`;
+      const h = Math.floor(m / 60);
+      return `démarré il y a ${h} h ${m % 60} min`;
+    };
+
+    // ── Toast helper ───────────────────────────────────────────────────────
+    let toastTimer = null;
+    const showToast = (msg, durationMs = 0) => {
+      toastText.textContent = msg;
+      toast.dataset.show = "true";
+      if (toastTimer) clearTimeout(toastTimer);
+      if (durationMs > 0) toastTimer = setTimeout(() => { toast.dataset.show = "false"; }, durationMs);
+    };
+    const hideToast = () => { toast.dataset.show = "false"; if (toastTimer) clearTimeout(toastTimer); };
+
+    // ── Autoplay = muted obligatoire ─────────────────────────────────────
+    stage.addEventListener("playing", () => {
+      if (stage.muted) unmuteBtn.hidden = false;
+    });
+    stage.addEventListener("volumechange", () => {
+      unmuteBtn.hidden = !stage.muted;
+      ctrlMute.innerHTML = stage.muted
+        ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>'
+        : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>';
+      ctrlVol.value = stage.muted ? 0 : stage.volume;
+    });
+    const doUnmute = () => {
+      stage.muted = false;
+      stage.volume = ctrlVol.value > 0 ? +ctrlVol.value : 1;
+      stage.play().catch(() => {});
+      unmuteBtn.hidden = true;
+    };
+    unmuteBtn.addEventListener("click", doUnmute);
+    ctrlMute.addEventListener("click", () => { stage.muted ? doUnmute() : (stage.muted = true); });
+    ctrlVol.addEventListener("input", () => {
+      const v = +ctrlVol.value;
+      stage.volume = v;
+      stage.muted = v === 0;
+    });
+
+    // ── Fullscreen ─────────────────────────────────────────────────────────
+    const toggleFs = () => {
+      if (document.fullscreenElement) document.exitFullscreen();
+      else stageWrap.requestFullscreen?.();
+    };
+    btnFs.addEventListener("click", toggleFs);
+    ctrlFs.addEventListener("click", toggleFs);
+    // Espace = mute, F = fullscreen (raccourcis classiques)
+    document.addEventListener("keydown", (e) => {
+      if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+      if (e.key === "m") { stage.muted ? doUnmute() : (stage.muted = true); }
+      if (e.key === "f") toggleFs();
+      if (e.key === "t") btnTheater.click();
+    });
+
+    // ── Theater mode ───────────────────────────────────────────────────────
+    btnTheater.addEventListener("click", () => {
+      const on = grid.dataset.theater !== "true";
+      grid.dataset.theater = String(on);
+      btnTheater.setAttribute("aria-pressed", String(on));
+      $("chat-aside").style.display = on ? "none" : "";
+    });
+
+    // ── Copy share link ────────────────────────────────────────────────────
+    btnCopy.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(location.href);
+        showToast("Lien copié ✓", 1800);
+      } catch { showToast("Copie impossible", 2500); }
+    });
+
+    // ── device_id par onglet ───────────────────────────────────────────────
+    const DK = "live_device_id";
+    let deviceId = sessionStorage.getItem(DK);
+    if (!deviceId) { deviceId = crypto.randomUUID(); sessionStorage.setItem(DK, deviceId); }
+
+    // ── Récup info /me + manifest ──────────────────────────────────────────
+    let me = null;
+    try { const r = await fetch("/api/me", { credentials: "include" }); if (r.ok) me = await r.json(); } catch {}
+    try {
+      const r = await fetch(`/api/live/${encodeURIComponent(streamId)}`);
+      if (r.ok) {
+        const j = await r.json();
+        if (j.title) titleEl.textContent = j.title;
+        if (j.owner_handle) handleEl.textContent = `@${j.owner_handle}`;
+        if (j.started_at) startedEl.textContent = fmtAgo(j.started_at);
+      }
+    } catch {}
+
+    // ── ECDH éphémère ──────────────────────────────────────────────────────
+    const kp = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveKey", "deriveBits"]);
+
+    // ── Chat helpers ───────────────────────────────────────────────────────
+    let chatN = 0;
+    const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    const append = (msg) => {
+      if (chatEmpty.parentElement) chatEmpty.remove();
+      const row = document.createElement("div");
+      row.className = "chat-row";
+      const when = new Date(msg.ts || Date.now()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      row.innerHTML = `<b>${escapeHtml(msg.from || "?")}</b><span>${escapeHtml(msg.text || "")}</span><time>${when}</time>`;
+      chatList.appendChild(row);
+      chatList.scrollTop = chatList.scrollHeight;
+      chatN += 1; chatCount.textContent = `${chatN} message${chatN > 1 ? "s" : ""}`;
+    };
+
+    // ── Viewer ─────────────────────────────────────────────────────────────
+    const viewer = new Viewer({
+      streamId, deviceId, ecdhKeyPair: kp, videoEl: stage,
+      onState: (s) => {
+        if (s.phase === "live") {
+          dot.classList.add("on");
+          status.textContent = "EN DIRECT";
+          const sc = s.score ?? 50;
+          quality.textContent = `qualité ${sc}`;
+          peers.innerHTML = `<span class="lv-dot" style="background:${(s.peers ?? 0) > 0 ? '#22c55e' : '#8a8a99'}"></span>${s.peers ?? 0} pair${(s.peers ?? 0) > 1 ? "s" : ""}`;
+          chatInput.disabled = false; chatBtn.disabled = false;
+          hideToast();
+        } else if (s.phase === "reconnecting") {
+          dot.classList.remove("on");
+          status.textContent = "Reconnexion…";
+          showToast("⟳ Reconnexion en cours…", 0);
+        } else if (s.phase === "ended") {
+          dot.classList.remove("on"); status.textContent = "Terminé";
+          chatInput.disabled = true; chatBtn.disabled = true;
+          showToast("Live terminé", 4000);
+        }
+        // Buffer + latence
+        if (typeof s.buffered === "number") {
+          stBuf.textContent = `${s.buffered.toFixed(1)} s`;
+          setCell(stBuf, s.buffered < 1 ? "bad" : s.buffered < 3 ? "warn" : "good");
+          // Latence ≈ buffer (en sequence mode, currentTime suit la fin du buffer)
+          latencyEl.textContent = `~${s.buffered.toFixed(1)} s`;
+        }
+        if (s.cache) {
+          stChunks.textContent = String(s.cache.chunks);
+          stBytes.textContent = fmtBytes(s.cache.bytes);
+          stSpan.textContent = `${s.cache.spanSec} s`;
+          stInit.textContent = s.cache.hasInit ? "oui" : "non";
+          setCell(stInit, s.cache.hasInit ? "good" : "warn");
+          stLast.textContent = s.cache.lastIdx ?? "—";
+        }
+        if (s.diag) {
+          stKey.textContent = s.diag.key ? "oui" : "non";
+          setCell(stKey, s.diag.key ? "good" : "bad");
+          stBc.textContent = s.diag.broadcasterInRoster ? (s.diag.broadcasterDevice || "présent") : "absent";
+          setCell(stBc, s.diag.broadcasterInRoster ? "good" : "bad");
+          stPc.textContent = s.diag.peerConn || "—";
+          setCell(stPc, s.diag.peerConn === "connected" ? "good"
+            : (s.diag.peerConn === "failed" || s.diag.peerConn === "—") ? "bad" : "warn");
+          stIce.textContent = s.diag.peerIce || "—";
+          setCell(stIce, ["connected","completed"].includes(s.diag.peerIce) ? "good"
+            : ["failed","disconnected"].includes(s.diag.peerIce) ? "bad" : "warn");
+          stCh.textContent = `${s.diag.peerChannels}/3`;
+          setCell(stCh, s.diag.peerChannels === 3 ? "good" : s.diag.peerChannels === 0 ? "bad" : "warn");
+          stSig.textContent = s.diag.lastSignalKind || "—";
+          stJr.textContent = String(s.diag.joinReqAttempts);
+          stFb.textContent = String(s.diag.fallbackAttempts);
+        }
+      },
+      onLog: (m) => console.debug("[live]", m),
+      onChat: append,
+    });
+
+    try {
+      await viewer.start();
+    } catch (e) {
+      grid.hidden = true; paywall.hidden = false;
+      $("sub-link").href = "/";
+      status.textContent = e?.message || "Accès refusé";
+    }
+
+    const sendChat = () => {
+      const t = chatInput.value.trim();
+      if (!t) return;
+      viewer.publishChat(t, me?.handle ? ("@" + me.handle) : "anon");
+      chatInput.value = "";
+    };
+    chatBtn.onclick = sendChat;
+    chatInput.addEventListener("keydown", (e) => { if (e.key === "Enter") sendChat(); });
+
+    window.addEventListener("beforeunload", () => { viewer.stop(); });
+  </script>
+</body>
+</html>

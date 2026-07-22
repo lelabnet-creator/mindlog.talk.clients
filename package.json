@@ -1,0 +1,12 @@
+{
+  "name": "mindlog-talk-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Client Web de mindlog · talk — socle UI+logique unique (SPA modules ES), enveloppé par les shells natifs (Capacitor) et desktop (Tauri).",
+  "scripts": {
+    "dev": "node dev-server.mjs",
+    "gen:types": "npx --yes openapi-typescript@7.13.0 ../mindlog.talk/contract/openapi.yaml -o web/types/api.d.ts",
+    "check": "for f in $(find web -name '*.js' -not -path '*/vendor/*'); do node --check \"$f\" || exit 1; done && echo 'parse ESM OK'"
+  }
+}
