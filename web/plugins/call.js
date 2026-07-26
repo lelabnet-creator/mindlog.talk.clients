@@ -8,9 +8,11 @@
  * ni de la signalisation ni du média. Aucun blob n'est stocké : le serveur n'est
  * qu'un tuyau temps réel (bus SSE, événement « signal »).
  *
- * Traversée de NAT : STUN public seulement (découverte d'IP, aucun relais de
- * média) → reste strictement P2P. Échoue sur NAT symétrique (comportement
- * assumé, faute de TURN).
+ * Traversée de NAT : STUN pour la découverte d'IP (P2P direct privilégié), et
+ * si le serveur en fournit un (GET /api/call/ice), relais TURN en DERNIER
+ * recours (NAT symétrique : 4G/5G, Wi-Fi d'entreprise). Même relayé, le média
+ * reste chiffré (DTLS-SRTP) : le relais ne voit que des paquets opaques.
+ * Sans TURN configuré, comportement historique : STUN seuls.
  *
  * S'enregistre via le registre de plugins de app.js et expose `host.call.start`,
  * appelé par le bouton 📞/🎥 de la fenêtre de chat. Les appels ENTRANTS sont
@@ -19,7 +21,8 @@
 
 import { t } from "../i18n.js";
 
-const ICE = {
+// Config ICE de REPLI (STUN publics) si /api/call/ice est injoignable.
+const FALLBACK_ICE = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
@@ -60,15 +63,35 @@ export default function register(host) {
     } catch { /* best-effort : l'appel reste fonctionnel sans historique */ }
   }
 
+  /* -------- Multi-appareils : « appel pris/refusé ici » (Partie A) --------
+   * Quand JE décroche/refuse sur CET appareil, on prévient MES AUTRES appareils
+   * (bus SSE de mon identité) pour qu'ils cessent de sonner. Payload self-chiffré
+   * (clé partagée entre mes appareils) → le serveur ne lit rien ; il ne fait que
+   * relayer. `peer` = handle de l'appelant, pour ne couper que le bon entrant. */
+  async function notifyOtherDevices(peer, action) {
+    try {
+      const enc = await host.md?.selfEncrypt?.(JSON.stringify({ peer, action }));
+      if (!enc || !host.md) return;
+      await api("/api/call/handled", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-access-key": myKey(), "x-device-id": host.md.deviceId() },
+        body: JSON.stringify(enc),
+      });
+    } catch { /* best-effort : sans réseau, les autres appareils s'arrêteront à l'expiration */ }
+  }
+
   /* ----------------------- Signalisation chiffrée ------------------------ */
   async function sendSignal(handle, peerPub, obj) {
     const enc = await e2eEncrypt(peerPub, JSON.stringify(obj)); // chiffré dans le navigateur
     // Le gating (allow_call/premium) est appliqué côté serveur à la 1re
     // signalisation du couple (l'offre) puis un « permis d'appel » laisse passer
     // l'answer/ICE en retour — l'appel peut donc aboutir et on décroche une fois.
+    // x-device-id : permet au serveur d'identifier l'appareil répondant et de
+    // diffuser lui-même le « call-handled » à mes autres appareils (ring-stop
+    // fiable, indépendant du client) en s'excluant de la coupure.
     await api(`/api/signal/${encodeURIComponent(handle)}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "x-access-key": myKey() },
+      headers: { "Content-Type": "application/json", "x-access-key": myKey(), ...(host.md ? { "x-device-id": host.md.deviceId() } : {}) },
       body: JSON.stringify(enc),
     });
   }
@@ -136,9 +159,27 @@ export default function register(host) {
     };
   }
 
+  /* ------------------ Serveurs ICE (STUN + TURN éphémère) ---------------- */
+  // Récupérés au moment de l'appel : le serveur joint des identifiants TURN
+  // éphémères si un relais est configuré (sinon STUN seuls). Mis en cache
+  // jusqu'à 5 min avant leur expiration. Échec réseau → repli STUN.
+  let iceCache = null; // { config, until }
+  async function getIceConfig() {
+    if (iceCache && Date.now() < iceCache.until) return iceCache.config;
+    try {
+      const d = await api("/api/call/ice", { headers: { "x-access-key": myKey() } });
+      if (Array.isArray(d?.iceServers) && d.iceServers.length) {
+        const until = d.expiresAt ? new Date(d.expiresAt).getTime() - 5 * 60 * 1000 : Date.now() + 10 * 60 * 1000;
+        iceCache = { config: { iceServers: d.iceServers }, until };
+        return iceCache.config;
+      }
+    } catch { /* injoignable → repli STUN, l'appel reste tentable en direct */ }
+    return FALLBACK_ICE;
+  }
+
   /* --------------------------- Connexion WebRTC -------------------------- */
-  function makePC() {
-    const pc = new RTCPeerConnection(ICE);
+  function makePC(ice) {
+    const pc = new RTCPeerConnection(ice || FALLBACK_ICE);
     pc.onicecandidate = (e) => {
       if (e.candidate && call) sendSignal(call.handle, call.peerPub, { k: "ice", cand: e.candidate }).catch(() => {});
     };
@@ -249,6 +290,7 @@ export default function register(host) {
     if (!el) return;
     if (stage === "connected") {
       if (call && !call.connectedAt) call.connectedAt = Date.now(); // début de communication (durée)
+      clearTimeout(call?.connectTimer); // connecté → plus de garde-fou « connexion »
       el.dataset.stage = "connected";
       const st = call.overlay.querySelector(".call-status");
       if (st) st.textContent = t("call_status_connected");
@@ -269,6 +311,7 @@ export default function register(host) {
     overlay.querySelector("#call-accept")?.addEventListener("click", () => acceptIncoming());
     overlay.querySelector("#call-decline")?.addEventListener("click", () => {
       sendSignal(handle, call.peerPub, { k: "decline" }).catch(() => {});
+      notifyOtherDevices(handle, "declined"); // coupe la sonnerie sur mes autres appareils
       endCall(false);
     });
     return overlay;
@@ -287,6 +330,15 @@ export default function register(host) {
   // Bouton caméra : l'appel démarre en AUDIO seul → le 1er clic acquiert la caméra,
   // ajoute la piste (→ renégociation perfect-negotiation) et affiche l'aperçu.
   // Les clics suivants coupent/réactivent simplement la vidéo.
+  // Force la VIDÉO à ON sur l'appel en cours (bascule AUDIO→VIDÉO en place, sans
+  // relancer d'appel) : acquiert la caméra si besoin, sinon réactive la piste coupée.
+  async function enableVideo() {
+    if (!call) return;
+    const vtracks = call.localStream?.getVideoTracks() || [];
+    if (vtracks.length) { if (!vtracks[0].enabled) toggleTrack("video"); return; }
+    await toggleCamera(); // acquisition caméra + renégociation perfect-negotiation
+  }
+
   async function toggleCamera() {
     if (!call?.pc || !call.localStream) return;
     if (call.localStream.getVideoTracks().length) { toggleTrack("video"); return; }
@@ -324,12 +376,58 @@ export default function register(host) {
   }
 
   /* --------------------------- Cycle de vie ------------------------------ */
-  // Délai max d'attente d'une réponse côté appelant avant d'abandonner.
+  // Délai max d'attente d'une réponse côté appelant avant d'abandonner. DOIT être
+  // inférieur à CALLEE_RING_MS : c'est l'appelant qui annonce l'abandon (hangup),
+  // le timeout de sonnerie de l'appelé n'est qu'un filet si ce hangup se perd.
   const NO_ANSWER_MS = 35000;
+  // Délai max de sonnerie côté APPELÉ : sans ce garde-fou, un appel non décroché
+  // laissait un `call` zombie qui sonnait sans fin ET déclinait les appels suivants.
+  const CALLEE_RING_MS = 45000;
+  // Délai max entre le décroché (answer envoyée/reçue) et la connexion média :
+  // au-delà, le P2P n'aboutira pas (NAT symétrique…) → on coupe au lieu de
+  // laisser un appel « connexion… » zombie que seul un échec ICE tardif fermait.
+  const CONNECT_GUARD_MS = 20000;
+  // ⚠ PAS de retransmission périodique de l'offre pendant la sonnerie : un
+  // client PÉRIMÉ (PWA/SW en cache, version d'avant le remplacement d'offre)
+  // prend la 2e offre pour un nouvel appel alors qu'il sonne déjà → sa branche
+  // « occupé » répond DECLINE → rejet auto chez l'appelant + ring-stop serveur
+  // qui coupe les autres appareils. Le rattrapage d'un trou SSE devra se faire
+  // côté serveur (replay/Last-Event-ID), invisible pour les vieux clients.
+
+  // Dernier appel entrant terminé (refusé/manqué) : une offre du même essai
+  // encore en vol (livraison SSE dupliquée/retardée) ne doit pas re-sonner.
+  let lastEndedCid = null;
+
+  function armRingTimeout() {
+    if (!call) return;
+    clearTimeout(call.ringTimer);
+    call.ringTimer = setTimeout(() => {
+      if (call && call.role === "callee" && !call.pc) {
+        console.info(`[call] appel de @${call.handle} manqué (sonnerie expirée)`);
+        logActivity?.({ kind: "call", level: "warn", text: t("call_log_missed_title").replace("{handle}", call.handle), detail: t("call_log_missed_detail"), peer: call.handle });
+        endCall(false);
+      }
+    }, CALLEE_RING_MS);
+  }
+
+  function armConnectTimeout() {
+    if (!call) return;
+    clearTimeout(call.connectTimer);
+    call.connectTimer = setTimeout(() => {
+      if (call && !call.connectedAt) {
+        toast(t("call_p2p_failed"));
+        logFailure?.("call", t("call_log_interrupted_title").replace("{handle}", call?.handle || "?"), t("call_log_interrupted_detail"), call?.handle);
+        endCall(true); // prévient le pair : lui aussi attend peut-être en « connexion »
+      }
+    }, CONNECT_GUARD_MS);
+  }
 
   function endCall(notifyPeer) {
     if (!call) return;
     clearTimeout(call.noAnswerTimer); // garde-fou « sans réponse » (appelant)
+    clearTimeout(call.ringTimer);     // garde-fou sonnerie (appelé)
+    clearTimeout(call.connectTimer);  // garde-fou « connexion » post-décroché
+    if (call.role === "callee" && call.cid) lastEndedCid = call.cid;
     const { pc, localStream, ringer, handle, peerPub, role, wantVideo, connectedAt, declined } = call;
     if (notifyPeer) sendSignal(handle, peerPub, { k: "hangup" }).catch(() => {});
     ringer?.stop();
@@ -349,28 +447,39 @@ export default function register(host) {
   // Par DÉFAUT : appel AUDIO seul. La vidéo s'active en cours d'appel via le bouton
   // caméra (renégociation). `opts.video === true` force la vidéo dès le départ.
   async function startCall(handle, peerPub, opts = {}) {
-    if (call) { toast(t("call_already")); return; }
+    if (call) {
+      // Déjà en appel : si c'est le MÊME pair et qu'on (re)demande la vidéo, on
+      // BASCULE l'appel courant en vidéo (renégociation) au lieu d'en relancer un.
+      if (opts.video === true && call.handle === handle) { enableVideo(); return; }
+      toast(t("call_already"));
+      return;
+    }
     if (!peerPub) { toast(t("call_no_e2e")); return; }
     const wantVideo = opts.video === true;
-    call = { handle, peerPub, role: "caller", polite: false, pendingIce: [], remoteDescSet: false, canRenegotiate: false, makingOffer: false, ignoreOffer: false, ringer: makeRinger(), wantVideo };
+    // cid : identifiant de CET essai d'appel, joint à l'offre. Permet à l'appelé de
+    // distinguer une RETRANSMISSION (même cid → même sonnerie) d'un NOUVEL essai.
+    const cid = Math.random().toString(36).slice(2, 10);
+    call = { handle, peerPub, cid, role: "caller", polite: false, pendingIce: [], remoteDescSet: false, canRenegotiate: false, makingOffer: false, ignoreOffer: false, ringer: makeRinger(), wantVideo };
     call.overlay = mountOverlay(handle, true, true);
     if (wantVideo) call.overlay.querySelector("#call-cam")?.classList.remove("off");
     try {
       call.localStream = await getMedia(wantVideo);
       attachLocal();
-      call.pc = makePC();
+      call.pc = makePC(await getIceConfig());
       call.localStream.getTracks().forEach((t) => call.pc.addTrack(t, call.localStream));
       const offer = await call.pc.createOffer();
       await call.pc.setLocalDescription(offer);
-      await sendSignal(handle, peerPub, { k: "offer", sdp: offer });
+      await sendSignal(handle, peerPub, { k: "offer", sdp: offer, cid });
       call.ringer.start();
       // Sans réponse au bout de NO_ANSWER_MS (correspondant absent ou answer
-      // jamais reçue) → on arrête au lieu de sonner indéfiniment.
+      // jamais reçue) → on arrête ET on le SIGNALE (hangup) : l'appelé cesse de
+      // sonner tout de suite et journalise « manqué », au lieu de sonner dans le
+      // vide (un décroché après cet instant partait vers un appel déjà clos).
       call.noAnswerTimer = setTimeout(() => {
         if (call && call.role === "caller" && !call.remoteDescSet && !call.connectedAt) {
           toast(t("call_no_answer").replace("{handle}", handle));
           logActivity?.({ kind: "call", level: "warn", text: t("call_log_no_answer_title").replace("{handle}", handle), detail: t("call_log_no_answer_detail"), peer: handle });
-          endCall(false);
+          endCall(true);
         }
       }, NO_ANSWER_MS);
     } catch (e) {
@@ -384,10 +493,26 @@ export default function register(host) {
   async function acceptIncoming() {
     if (!call || call.role !== "callee" || !call.pendingOffer) return;
     call.ringer?.stop();
+    clearTimeout(call.ringTimer); // décroché → plus de garde-fou sonnerie
     try {
       call.localStream = await getMedia(!!call.wantVideo); // respecte audio vs vidéo de l'offre
+    } catch (e) {
+      // Micro refusé/indisponible → REFUS explicite : l'appelant cesse de sonner
+      // immédiatement au lieu d'attendre son timeout dans le vide. (Avant : on
+      // coupait en silence, et on avait déjà annoncé « answered » aux autres
+      // appareils → l'appel était perdu partout sans que personne ne le sache.)
+      sendSignal(call.handle, call.peerPub, { k: "decline" }).catch(() => {});
+      toast(t("call_accept_fail") + (e?.message || e));
+      logFailure?.("call", t("call_log_accept_fail_title").replace("{handle}", call?.handle || "?"), e, call?.handle);
+      endCall(false);
+      return;
+    }
+    // Seulement une fois le micro acquis : tant que le décroché peut échouer, les
+    // autres appareils doivent continuer de sonner (ils restent un recours).
+    notifyOtherDevices(call.handle, "answered");
+    try {
       attachLocal();
-      call.pc = makePC();
+      call.pc = makePC(await getIceConfig());
       call.localStream.getTracks().forEach((t) => call.pc.addTrack(t, call.localStream));
       await call.pc.setRemoteDescription(call.pendingOffer);
       call.remoteDescSet = true;
@@ -396,10 +521,14 @@ export default function register(host) {
       await call.pc.setLocalDescription(answer);
       await sendSignal(call.handle, call.peerPub, { k: "answer", sdp: answer });
       call.canRenegotiate = true; // handshake terminé → la vidéo peut s'activer ensuite
+      armConnectTimeout(); // answer partie : le média doit suivre, sinon on coupe
       setStage("connecting");
       const ringEl = call.overlay.querySelector(".call-ring-actions");
       if (ringEl) ringEl.remove();
     } catch (e) {
+      // Échec APRÈS le micro (setup WebRTC) : là aussi, prévenir l'appelant —
+      // les autres appareils ont déjà cessé de sonner, il n'y a plus de recours.
+      if (call) sendSignal(call.handle, call.peerPub, { k: "decline" }).catch(() => {});
       toast(t("call_accept_fail") + (e?.message || e));
       logFailure?.("call", t("call_log_accept_fail_title").replace("{handle}", call?.handle || "?"), e, call?.handle);
       endCall(false);
@@ -419,6 +548,11 @@ export default function register(host) {
     // OFFRE entrante : soit un NOUVEL appel, soit une RENÉGOCIATION de l'appel en
     // cours avec ce même pair (ex. il vient d'activer sa caméra).
     if (msg.k === "offer") {
+      // Retransmission d'une offre initiale déjà traitée ICI (décroché fait, ou
+      // appel terminé) : ignorer — sinon elle serait prise pour une renégociation
+      // (glare) ou relancerait une sonnerie fantôme après refus.
+      if (call && msg.cid && msg.cid === call.cid && call.pc) return;
+      if (!call && msg.cid && msg.cid === lastEndedCid) return;
       // Renégociation de l'appel courant (perfect negotiation).
       if (call && d.from === call.handle && call.pc) {
         const collision = call.makingOffer || call.pc.signalingState !== "stable";
@@ -432,6 +566,22 @@ export default function register(host) {
         } catch { /* ignoré */ }
         return;
       }
+      // MÊME appelant, sonnerie pas encore décrochée (pas de pc) :
+      //  - même cid → simple RETRANSMISSION de l'offre en cours : rien à changer
+      //    (ne PAS ré-armer le timeout, la sonnerie serait sans fin) ;
+      //  - cid différent/absent → nouvel ESSAI d'appel : on remplace l'offre en
+      //    attente et on continue de sonner. (Avant : la branche « occupé »
+      //    ci-dessous DÉCLINAIT — un appareil resté en sonnerie zombie tuait
+      //    tout nouvel appel du même contact.)
+      if (call && d.from === call.handle && call.role === "callee" && !call.pc) {
+        if (msg.cid && msg.cid === call.cid) { call.pendingOffer = msg.sdp; return; }
+        console.info(`[call] nouvelle offre de @${d.from} pendant la sonnerie → offre remplacée`);
+        call.cid = msg.cid;
+        call.pendingOffer = msg.sdp;
+        call.pendingIce = [];
+        armRingTimeout();
+        return;
+      }
       if (call) { // déjà en appel avec QUELQU'UN D'AUTRE → occupé
         sendSignal(d.from, d.pub, { k: "decline" }).catch(() => {});
         return;
@@ -439,13 +589,14 @@ export default function register(host) {
       // Nouvel appel entrant. L'appel démarre en audio ; la vidéo (de part et
       // d'autre) s'active ensuite via renégociation, donc on ouvre toujours en audio.
       call = {
-        handle: d.from, peerPub: d.pub, role: "callee", polite: true,
+        handle: d.from, peerPub: d.pub, cid: msg.cid, role: "callee", polite: true,
         pendingIce: [], pendingOffer: msg.sdp, remoteDescSet: false,
         canRenegotiate: false, makingOffer: false, ignoreOffer: false,
         ringer: makeRinger(), wantVideo: false,
       };
       call.overlay = mountOverlay(d.from, true, false);
       call.ringer.start();
+      armRingTimeout(); // jamais de sonnerie zombie : appel manqué au bout du délai
       return;
     }
 
@@ -462,6 +613,7 @@ export default function register(host) {
           clearTimeout(call.noAnswerTimer); // réponse reçue → on annule le garde-fou
           await flushPendingIce();
           call.canRenegotiate = true; // la vidéo peut désormais s'activer
+          armConnectTimeout(); // le média doit suivre l'answer, sinon on coupe
           setStage("connecting");
         }
       } catch { /* ignoré */ }
@@ -472,7 +624,14 @@ export default function register(host) {
         call.pendingIce.push(msg.cand);
       }
     } else if (msg.k === "hangup") {
-      toast(t("call_peer_hangup").replace("{handle}", call.handle));
+      if (call.role === "callee" && !call.pc) {
+        // Hangup pendant MA sonnerie = l'appelant a annulé (ou son garde-fou « sans
+        // réponse » a expiré) → c'est un appel MANQUÉ, pas un raccroché en cours.
+        toast(t("call_log_missed_title").replace("{handle}", call.handle));
+        logActivity?.({ kind: "call", level: "warn", text: t("call_log_missed_title").replace("{handle}", call.handle), detail: t("call_log_missed_detail"), peer: call.handle });
+      } else {
+        toast(t("call_peer_hangup").replace("{handle}", call.handle));
+      }
       endCall(false);
     } else if (msg.k === "decline") {
       toast(t("call_peer_declined").replace("{handle}", call.handle));
@@ -482,7 +641,33 @@ export default function register(host) {
     }
   });
 
-  host.call = { start: startCall };
+  /* --- Un autre de MES appareils a pris/refusé l'appel → couper ici (Partie A) ---
+   * Deux formes acceptées :
+   *  - CLAIR {from, peer} : émise par le SERVEUR au 1er signal retour du couple
+   *    (fiable : aucune dépendance au client répondant ni à la crypto self) ;
+   *  - CHIFFRÉE {iv, ciphertext} : émise par le client répondant (self-key). */
+  onSSE("call-handled", async (d) => {
+    if (!d) return;
+    if (d.from && host.md && d.from === host.md.deviceId()) return; // émis par moi-même → ignorer
+    let peer = typeof d.peer === "string" && d.peer ? d.peer : null; // forme serveur (clair)
+    if (!peer && d.iv && d.ciphertext) {
+      await ensureE2E(myHandle(), myKey()).catch(() => {}); // clé self requise pour déchiffrer
+      const plain = await host.md?.selfDecrypt?.(d.iv, d.ciphertext);
+      if (plain) { try { peer = JSON.parse(plain).peer; } catch { /* illisible */ } }
+    }
+    if (!peer) return;
+    console.info(`[call] appel de @${peer} pris/refusé sur un autre appareil`);
+    // Ne couper que si JE fais sonner un ENTRANT de ce pair PAS ENCORE décroché ICI
+    // (`!call.pc` : dès que j'ai accepté, mon pc existe → l'événement serveur déclenché
+    // par MA propre answer ne doit jamais tuer mon appel).
+    if (call && call.role === "callee" && call.handle === peer && !call.pc) {
+      call.ringer?.stop();
+      toast(t("call_taken_elsewhere").replace("{handle}", call.handle));
+      endCall(false); // ne PAS notifier le pair : un autre de mes appareils gère l'appel
+    }
+  });
+
+  host.call = { start: startCall, enableVideo };
 
   host.registerPlugin({ name: "call" });
 }

@@ -40,6 +40,13 @@
       window.__APP_VERSION__ = "%%APP_VERSION%%";
       window.__TURNSTILE_SITE_KEY__ = "%%TURNSTILE_SITE_KEY%%";
     </script>
+    <!-- Import map : les modules internes importent « ../app.js » SANS ?v= ;
+         sans cette redirection, cette URL nue serait un module DIFFÉRENT de
+         « app.js?v=__V__ » chargé ci-dessous → app.js évalué DEUX FOIS (double
+         enregistrement des plugins/listeners : double sonnerie, double QR…). -->
+    <script type="importmap">
+      { "imports": { "/static/app.js": "/static/app.js?v=__V__" } }
+    </script>
     <script type="module">
       // Prep bascule client/backend : si le backend ne templatise plus la page
       // (placeholder `%%APP_VERSION%%` non substitué), la config runtime est
@@ -52,7 +59,14 @@
           const cfg = await fetch("/api/config").then((r) => r.json());
           window.__APP_VERSION__ = cfg.appVersion;
           window.__TURNSTILE_SITE_KEY__ = cfg.turnstileSiteKey;
-          window.__APP_V__ = cfg.assetVersion;
+          // ⚠ Jeton d'assets : NE PAS écraser un `__V__` déjà substitué (edge).
+          // L'edge ne templatise QUE `__V__` : avant ce garde, la condition `%%`
+          // (vraie en prod scindée) remplaçait le jeton edge (secondes) par
+          // `assetVersion` du backend (millisecondes) → URLs de modules
+          // incohérentes entre shell et plugins (mélange de versions).
+          if (String(window.__APP_V__).indexOf("__") === 0) {
+            window.__APP_V__ = cfg.assetVersion;
+          }
         } catch (_) {
           /* réseau indisponible : on conserve les valeurs en place */
         }

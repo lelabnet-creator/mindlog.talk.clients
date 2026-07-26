@@ -48,8 +48,14 @@ export async function openE2eBackup(handle, accessKey, onDone, opts = {}) {
       <h2>${mandatory ? t("eb_title_m") : t("eb_title")}</h2>
       <p class="sub">${mandatory ? t("eb_sub_m") : t("eb_sub")}</p>
       <div style="display:flex;flex-direction:column;gap:.6rem">
-        ${hasPasskey ? `<button type="button" class="btn primary" id="eb-passkey">${icon("shield", 15)} ${t("eb_passkey")} <span class="lbl-sm" style="opacity:.7">&nbsp;${t("eb_note_1geste")}</span></button>` : ""}
-        <button type="button" class="btn${hasPasskey ? "" : " primary"}" id="eb-pin">${icon("lock", 15)} ${t("eb_pin")} <span class="lbl-sm" style="opacity:.7">&nbsp;${t("eb_note_simple")}</span></button>
+        ${
+          // Passkey = confort lié à l'authentificateur, PAS garanti restaurable sur un
+          // autre appareil (ex. Android n'a pas de chemin de restauration passkey). En
+          // mode OBLIGATOIRE on exige donc un secret PORTABLE (PIN ou passphrase) ; la
+          // passkey reste proposée en option hors mode obligatoire.
+          hasPasskey && !mandatory ? `<button type="button" class="btn primary" id="eb-passkey">${icon("shield", 15)} ${t("eb_passkey")} <span class="lbl-sm" style="opacity:.7">&nbsp;${t("eb_note_1geste")}</span></button>` : ""
+        }
+        <button type="button" class="btn${(hasPasskey && !mandatory) ? "" : " primary"}" id="eb-pin">${icon("lock", 15)} ${t("eb_pin")} <span class="lbl-sm" style="opacity:.7">&nbsp;${t("eb_note_simple")}</span></button>
         <button type="button" class="btn" id="eb-pass">${icon("key", 15)} ${t("eb_pass")} <span class="lbl-sm" style="opacity:.7">&nbsp;${t("eb_note_safe")}</span></button>
       </div>
     </div>`;
@@ -116,6 +122,7 @@ export async function openKeyRecovery(handle, accessKey, onDone) {
       </ol>
       <div style="display:flex;gap:.5rem;flex-wrap:wrap">
         ${hasVault ? `<button type="button" class="btn primary" id="kr-restore">${icon("download", 15)} ${t("kr_restore")}</button>` : ""}
+        ${typeof window !== "undefined" && window.__mindlogSyncLink ? `<button type="button" class="btn" id="kr-link">${icon("shield", 15)} ${t("sync_link_title")}</button>` : ""}
         <button type="button" class="btn" id="kr-later">${t("kr_later")}</button>
       </div>
     </div>`;
@@ -127,6 +134,11 @@ export async function openKeyRecovery(handle, accessKey, onDone) {
   overlay.querySelector("#kr-restore")?.addEventListener("click", () => {
     close();
     openE2eRestore(handle, accessKey, onDone);
+  });
+  // Handoff SAS : recevoir la clé d'identité depuis un de mes appareils déjà connectés.
+  overlay.querySelector("#kr-link")?.addEventListener("click", () => {
+    close();
+    try { window.__mindlogSyncLink(); } catch { /* plugin sync indisponible */ }
   });
 }
 

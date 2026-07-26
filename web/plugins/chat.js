@@ -47,9 +47,17 @@ function callLabel(c, mine, time) {
   return `${icon} ${kind} ${dir} · ${detail}${time ? " · " + time : ""}`;
 }
 
-// État « échange impossible » : illustration (deux profils dont le lien est rompu)
-// + explication de la raison. `reasonHtml` est du HTML déjà échappé.
-function chatBlockedHtml(reasonHtml) {
+// État « échange impossible » : illustration (deux profils) + explication.
+// `reasonHtml` et `actionHtml` sont du HTML déjà échappé.
+// `pending` distingue un lien EN COURS d'établissement (une réciproque manque,
+// ça se règle en un clic) d'un lien franchement rompu : croix rouge dans le
+// second cas, sablier ambré dans le premier. Annoncer « bloqué » quand on
+// attend juste une validation, c'est décourager pour rien.
+function chatBlockedHtml(reasonHtml, { pending = false, actionHtml = "" } = {}) {
+  const linkGlyph = pending
+    ? `<circle cx="60" cy="34" r="7" stroke="var(--warn, #d98e04)" stroke-width="2"/>
+       <path d="M60 30v4.5l3 2" stroke="var(--warn, #d98e04)" stroke-width="2" stroke-linecap="round"/>`
+    : `<path d="M54 27l12 14M66 27l-12 14" stroke="var(--danger)" stroke-width="2.2" stroke-linecap="round"/>`;
   return `<div class="chat-blocked">
     <svg viewBox="0 0 120 64" width="124" height="66" fill="none" aria-hidden="true" class="chat-blocked-svg">
       <circle cx="28" cy="34" r="13" stroke="currentColor" stroke-width="2"/>
@@ -59,11 +67,28 @@ function chatBlockedHtml(reasonHtml) {
       <circle cx="92" cy="29" r="4.5" stroke="currentColor" stroke-width="2"/>
       <path d="M83 43c1.6-4 5-6 9-6s7.4 2 9 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
       <path d="M46 34h9M65 34h9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="1 5"/>
-      <path d="M54 27l12 14M66 27l-12 14" stroke="var(--danger)" stroke-width="2.2" stroke-linecap="round"/>
+      ${linkGlyph}
     </svg>
     <p class="chat-blocked-text">${reasonHtml}</p>
+    ${actionHtml}
   </div>`;
 }
+
+// Traduit le motif STABLE renvoyé par l'API (cf. `chatDenied` côté serveur) en
+// écran d'explication. Renvoyer `action: "add"` demande un bouton « ajouter en
+// retour » : c'est le seul cas où l'utilisateur ICI peut débloquer l'échange.
+const CHAT_DENIALS = {
+  awaiting_them: { key: "chat_blocked_awaiting_them", pending: true },
+  awaiting_me:   { key: "chat_blocked_awaiting_me",   pending: true, action: "add" },
+  not_contacts:  { key: "chat_blocked_not_contacts",  pending: true, action: "add" },
+  unknown_handle:{ key: "chat_blocked_unknown" },
+  self:          { key: "chat_blocked_self" },
+  unauthenticated:{ key: "chat_blocked_auth" },
+  messaging_off: { key: "chat_blocked_disabled" },
+  calls_off:     { key: "chat_blocked_disabled" },
+  premium_chat:  { key: "chat_blocked_premium" },
+  premium_call:  { key: "chat_blocked_premium" },
+};
 
 export default function register(host) {
   const {
@@ -330,6 +355,19 @@ export default function register(host) {
         // autre appareil → seul le 1er passait). On avance donc message par message, dans l'ordre.
         const texts = [];
         for (const m of d.messages) texts.push(await decodeOne(m));
+        // ⚠ Sender keys de groupe (SKDM) : elles transitent par CETTE conversation 1:1
+        // et viennent d'être déchiffrées ci-dessus — or le Double Ratchet est DESTRUCTIF,
+        // donc gSyncKeys ne pourra plus les relire ensuite. On les absorbe donc TOUT DE
+        // SUITE dans l'état du groupe, sinon les messages du pair restent bloqués sur
+        // « en attente de la clé de @x ». Idempotent (cf. gAbsorbSkd).
+        for (let i = 0; i < texts.length; i++) {
+          const mi = d.messages[i];
+          if (!mi || mi.sender_id === d.me) continue; // mes propres SKDM : rien à absorber
+          const tx = texts[i];
+          if (typeof tx === "string" && (tx.startsWith("skd") || tx.startsWith("skr"))) {
+            try { await host.groups?.absorbSkd?.(myHandle, handle, tx); } catch {}
+          }
+        }
         // Minuterie partagée : la valeur active = dernier message de contrôle « tmr<n> ».
         const tmrRe = /^tmr(\d+)$/;
         for (let i = 0; i < texts.length; i++) {
@@ -349,7 +387,7 @@ export default function register(host) {
             // Messages de contrôle (Sender Key Distribution pour les groupes) :
             // jamais affichés dans la conversation 1:1, ce sont des paquets de
             // protocole consommés silencieusement par crypto/groups.js::gSyncKeys.
-            if (typeof txt === "string" && txt.startsWith("skd")) return "";
+            if (typeof txt === "string" && (txt.startsWith("skd") || txt.startsWith("skr"))) return "";
             // Message de contrôle de minuterie → note système centrée (pas une bulle).
             const tm = typeof txt === "string" && txt.match(tmrRe);
             if (tm) {
@@ -491,12 +529,33 @@ export default function register(host) {
         // Échange impossible (403 accès / 402 premium) : on explique POURQUOI, avec une
         // illustration, et on masque le composer (impossible d'écrire de toute façon).
         if (e?.status === 403 || e?.status === 402) {
-          const reason = /contact/i.test(e.message)
-            ? t("chat_blocked_contact").replaceAll("{handle}", esc(handle))
-            : /abonn/i.test(e.message)
-              ? t("chat_blocked_premium").replace("{handle}", esc(handle))
-              : t("chat_blocked_disabled").replace("{handle}", esc(handle));
-          log.innerHTML = chatBlockedHtml(reason);
+          // On lit le motif STABLE renvoyé par l'API. L'ancienne détection par
+          // regex sur le message français se trompait : « Ce contact a désactivé
+          // la messagerie » matchait /contact/i et affichait donc « pas encore
+          // en relation », un contresens — et elle ne marchait dans aucune autre
+          // langue. Repli sur `chat_blocked_contact` pour les vieux backends.
+          const d = CHAT_DENIALS[e.reason] ?? { key: "chat_blocked_contact", pending: true };
+          const text = t(d.key).replaceAll("{handle}", esc(e.handle || handle));
+          const actionHtml = d.action === "add"
+            ? `<button type="button" class="btn primary" id="ch-add-back">${esc(t("chat_blocked_add"))}</button>`
+            : "";
+          log.innerHTML = chatBlockedHtml(text, { pending: !!d.pending, actionHtml });
+          // « Ajouter en retour » : referme la réciproque puis relance le rendu —
+          // la conversation s'ouvre sans que l'utilisateur ait à naviguer ailleurs.
+          log.querySelector("#ch-add-back")?.addEventListener("click", async (ev) => {
+            ev.target.disabled = true;
+            try {
+              await api("/api/relations", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", ...authH },
+                body: JSON.stringify({ handle: e.handle || handle, type: "amis" }),
+              });
+              await refresh();
+            } catch (err) {
+              ev.target.disabled = false;
+              toast(err.message);
+            }
+          });
           if (form) form.style.display = "none";
         } else {
           if (form) form.style.display = "";
@@ -908,10 +967,14 @@ export default function register(host) {
         if (!overlay.isConnected) { clearInterval(timer); return; }
         try {
           group = await groups.api.get(gid);
+          // Le panneau est ouvert à TOUS les membres : un simple membre doit pouvoir
+          // consulter la liste et QUITTER le groupe (le libellé passe à « Voir »).
+          // Les actions sensibles (renommer/ajouter/retirer/supprimer) restent
+          // verrouillées par rôle À L'INTÉRIEUR du panneau.
           const canManage = group.role === "owner" || group.role === "admin";
           overlay.querySelector("#gc-title").innerHTML =
             `👥 ${esc(group.name || t("chat_group"))} <span class="deg">${t("chat_group_members_enc").replace("{n}", group.members.length)}</span>` +
-            (canManage ? ` <button type="button" class="btn sm" id="gc-manage">${t("chat_manage")}</button>` : "");
+            ` <button type="button" class="btn sm" id="gc-manage">${canManage ? t("chat_manage") : t("eix_group_view")}</button>`;
           // S'assurer d'avoir/diffuser les sender keys, puis charger.
           await groups.syncKeys(myHandle, myKey, gid, group.members.map((m) => m.handle));
           const d = await groups.load(myHandle, myKey, gid);
@@ -1071,6 +1134,8 @@ export default function register(host) {
       });
       async function legacyManage() {
         if (!group) return;
+        // Repli hors-Échanges : seul un admin/owner peut ajouter un membre.
+        if (!(group.role === "owner" || group.role === "admin")) return;
         const handle = await host.promptDialog(t("chat_add_member_prompt"), { placeholder: "@handle", ok: t("chat_add") });
         if (!handle) return;
         try { await groups.api.addMember(gid, handle.replace(/^@/, "").trim()); refresh(); }

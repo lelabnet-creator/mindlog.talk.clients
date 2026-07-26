@@ -26,6 +26,12 @@ const md = {
 };
 export const GECDSA = { name: "ECDSA", namedCurve: "P-256" };
 export const SKD_PREFIX = "skd"; // message de contrôle 1-à-1 portant une sender key
+// Demande de (re)distribution : envoyée quand on reçoit un message de groupe qu'on
+// ne peut pas déchiffrer faute de sender key du pair. Sans ce mécanisme, un SKDM
+// perdu (message 1:1 expiré au bout de 24 h, ou chaîne du ratchet déjà avancée) laisse
+// la conversation bloquée à jamais sur « en attente de la clé de @x » : l'expéditeur
+// a marqué `distributedTo[moi]` et ne renverra jamais spontanément sa clé.
+export const SKR_PREFIX = "skr";
 export const G_MAX_SKIP = 1000;
 
 export async function gSign(privJwk, data) {
@@ -104,6 +110,46 @@ export async function gLoadState(me, gid) {
 }
 export const gSaveState = (me, gid, st) => rIdbPut(gStateKey(me, gid), st);
 
+/**
+ * Absorbe un paquet SKDM (« sender key » de groupe) déchiffré AILLEURS que dans
+ * gSyncKeys — typiquement par la vue de conversation 1:1, qui déchiffre tous les
+ * messages pour les afficher.
+ *
+ * Pourquoi c'est indispensable : le Double Ratchet est DESTRUCTIF. Si la vue 1:1
+ * déchiffre le SKDM en premier, la chaîne avance et gSyncKeys ne peut plus le
+ * relire → la sender key de l'expéditeur n'est jamais enregistrée et ses messages
+ * de groupe restent bloqués sur « en attente de la clé de @x ».
+ *
+ * Idempotent : si on connaît déjà cette sender key (même sigPub), on NE réinitialise
+ * PAS l'état (sinon on perdrait l'itérateur et les clés sautées déjà dérivés).
+ * Une clé RÉGÉNÉRÉE par le pair (sigPub différent) est en revanche bien adoptée.
+ * Renvoie true si l'état du groupe a été modifié.
+ */
+export async function gAbsorbSkd(me, senderHandle, text) {
+  if (typeof text !== "string" || !me || !senderHandle) return false;
+  const isSkd = text.startsWith(SKD_PREFIX);
+  const isSkr = !isSkd && text.startsWith(SKR_PREFIX);
+  if (!isSkd && !isSkr) return false;
+  let o;
+  try { o = JSON.parse(text.slice((isSkd ? SKD_PREFIX : SKR_PREFIX).length)); } catch { return false; }
+  if (!o || !o.gid) return false;
+  const st = await gLoadState(me, o.gid);
+  if (isSkr) {
+    // Demande de redistribution : on oublie le « déjà envoyé » pour ce pair ; la
+    // prochaine gSyncKeys (ouverture du groupe) lui renverra notre sender key.
+    if (!st.distributedTo || !(senderHandle in st.distributedTo)) return false;
+    delete st.distributedTo[senderHandle];
+    await gSaveState(me, o.gid, st);
+    return true;
+  }
+  if (!o.dist) return false;
+  const cur = st.peers[senderHandle];
+  if (cur && cur.sigPub === o.dist.sigPub) return false; // déjà connue → ne pas rembobiner
+  st.peers[senderHandle] = gPeerFromDist(o.dist);
+  await gSaveState(me, o.gid, st);
+  return true;
+}
+
 export const gApi = {
   list: () => api("/api/groups", { headers: authHeaders() }),
   get: (gid) => api(`/api/groups/${encodeURIComponent(gid)}`, { headers: authHeaders() }),
@@ -111,6 +157,9 @@ export const gApi = {
   addMember: (gid, handle) => api(`/api/groups/${encodeURIComponent(gid)}/members`, { method: "POST", headers: jsonAuth(), body: JSON.stringify({ handle }) }),
   removeMember: (gid, handle) => api(`/api/groups/${encodeURIComponent(gid)}/members/${encodeURIComponent(handle)}`, { method: "DELETE", headers: authHeaders() }),
   leave: (gid) => api(`/api/groups/${encodeURIComponent(gid)}/leave`, { method: "POST", headers: jsonAuth(), body: "{}" }),
+  // Renommage (admin/owner) et suppression (owner) — parité avec l'app Android.
+  rename: (gid, name) => api(`/api/groups/${encodeURIComponent(gid)}`, { method: "PATCH", headers: jsonAuth(), body: JSON.stringify({ name }) }),
+  remove: (gid) => api(`/api/groups/${encodeURIComponent(gid)}`, { method: "DELETE", headers: authHeaders() }),
   messages: (gid) => api(`/api/groups/${encodeURIComponent(gid)}/messages`, { headers: authHeaders() }),
   deleteMessage: (gid, mid) => api(`/api/groups/${encodeURIComponent(gid)}/messages/${mid}`, { method: "DELETE", headers: authHeaders() }),
   burnMessage: (gid, mid) => api(`/api/groups/${encodeURIComponent(gid)}/messages/${mid}/burn`, { method: "POST", headers: jsonAuth(), body: "{}" }),
@@ -149,9 +198,119 @@ export async function gAttachDownload(gid, meta) {
 }
 
 /**
- * Synchronise les sender keys : (1) garantit ma sender key et l'envoie aux autres
- * membres via le canal 1-à-1 (SKDM) ; (2) collecte les SKDM reçus dans mes
- * conversations 1-à-1 avec chaque membre. À appeler à l'ouverture d'un groupe.
+ * Envoie un paquet de contrôle (SKDM ou demande de clé) à un membre via le canal
+ * 1-à-1 : fan-out multi-appareils si dispo, sinon Double Ratchet, sinon E2E simple.
+ * Renvoie true si l'envoi a abouti. Factorisé (utilisé par la distribution ET la
+ * re-demande de clé).
+ */
+async function gSendControl(me, myKey, h, payload) {
+  try {
+    if (md) {
+      const fo = await md.fanoutEncrypt(me, myKey, h, payload).catch(() => null);
+      if (fo) {
+        await api(`/api/messages/${encodeURIComponent(h)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-access-key": myKey, "x-device-id": md.deviceId() },
+          body: JSON.stringify({ clientMsgId: fo.clientMsgId, envelopes: fo.envelopes }),
+        });
+        return true;
+      }
+    }
+    const r = await ratchetSend(me, myKey, h, null, payload);
+    if (!r) await e2eEncryptSend(me, myKey, h, payload);
+    return true;
+  } catch { return false; }
+}
+
+/**
+ * Demande à chaque expéditeur dont on n'a PAS la sender key de la redistribuer.
+ * Anti-spam : au plus une demande par pair et par groupe toutes les 10 minutes.
+ * C'est le filet de sécurité qui débloque les conversations restées en
+ * « en attente de la clé de @x ».
+ */
+export async function gRequestSenderKeys(me, myKey, gid, senders) {
+  if (!me || !myKey || !senders?.length) return 0;
+  const st = await gLoadState(me, gid);
+  if (!st.requestedAt) st.requestedAt = {};
+  const now = Date.now();
+  const payload = SKR_PREFIX + JSON.stringify({ gid });
+  let sent = 0;
+  for (const h of [...new Set(senders)]) {
+    if (!h || h === me || st.peers[h]) continue;            // clé déjà connue
+    if (now - (st.requestedAt[h] || 0) < 10 * 60 * 1000) continue; // déjà demandé récemment
+    if (await gSendControl(me, myKey, h, payload)) { st.requestedAt[h] = now; sent++; }
+  }
+  if (sent) await gSaveState(me, gid, st);
+  return sent;
+}
+
+/* ------ Canal DÉDIÉ d'échange des sender keys (autorisé par le groupe) ----
+ * Le canal 1:1 est réservé aux contacts RÉCIPROQUES : deux membres d'un même
+ * groupe qui ne sont pas contacts recevaient un 403 et ne pouvaient jamais
+ * échanger leurs clés (« en attente de la clé de @x », définitivement). On passe
+ * donc par une boîte aux lettres de groupe, autorisée par l'APPARTENANCE.
+ * Chiffrement : vers la clé publique d'identité du destinataire (info publique).
+ * ------------------------------------------------------------------------ */
+const _gPubCache = new Map();
+async function gMemberPub(handle) {
+  const h = String(handle).replace(/^@/, "");
+  if (_gPubCache.has(h)) return _gPubCache.get(h);
+  const d = await api(`/api/identities/${encodeURIComponent(h)}`, { headers: authHeaders() }).catch(() => null);
+  const pub = d?.pubkey || null;
+  if (pub) _gPubCache.set(h, pub);
+  return pub;
+}
+
+/** Dépose ma sender key pour chaque membre qui ne l'a pas encore reçue. */
+async function gPublishSenderKey(gid, st, others) {
+  const targets = others.filter((h) => !st.publishedTo?.[h]);
+  if (!targets.length) return 0;
+  const payload = SKD_PREFIX + JSON.stringify({ gid, dist: gSenderDist(st.mySender) });
+  const envelopes = [];
+  for (const h of targets) {
+    const pub = await gMemberPub(h);
+    if (!pub) continue;
+    try {
+      const enc = await e2eEncrypt(pub, payload);
+      envelopes.push({ to: h, fromPub: E2E.pubStr || "", iv: enc.iv, ciphertext: enc.ciphertext });
+    } catch {}
+  }
+  if (!envelopes.length) return 0;
+  try {
+    await api(`/api/groups/${encodeURIComponent(gid)}/keys`, {
+      method: "POST", headers: jsonAuth(), body: JSON.stringify({ envelopes }),
+    });
+    if (!st.publishedTo) st.publishedTo = {};
+    for (const e of envelopes) st.publishedTo[e.to] = Date.now();
+    return envelopes.length;
+  } catch { return 0; }
+}
+
+/** Lit les sender keys déposées POUR MOI dans ce groupe et les enregistre. */
+async function gCollectSenderKeys(gid, st) {
+  const d = await api(`/api/groups/${encodeURIComponent(gid)}/keys`, { headers: authHeaders() }).catch(() => null);
+  for (const e of d?.envelopes || []) {
+    if (!e?.from || !e.iv || !e.ciphertext) continue;
+    const pub = e.fromPub || (await gMemberPub(e.from));
+    if (!pub) continue;
+    const txt = await e2eDecrypt(pub, e.iv, e.ciphertext).catch(() => null);
+    if (typeof txt !== "string" || !txt.startsWith(SKD_PREFIX)) continue;
+    try {
+      const o = JSON.parse(txt.slice(SKD_PREFIX.length));
+      if (o.gid !== gid || !o.dist) continue;
+      const cur = st.peers[e.from];
+      if (cur && cur.sigPub === o.dist.sigPub) continue; // déjà connue → ne pas rembobiner
+      st.peers[e.from] = gPeerFromDist(o.dist);
+    } catch {}
+  }
+}
+
+/**
+ * Synchronise les sender keys : (1) garantit ma sender key et la publie dans la
+ * boîte du GROUPE (+ envoi 1:1 historique, best-effort pour les anciens clients) ;
+ * (2) collecte les clés déposées pour moi, puis celles présentes dans mes
+ * conversations 1-à-1, et honore les demandes de redistribution (SKR).
+ * À appeler à l'ouverture d'un groupe.
  */
 export async function gSyncKeys(me, myKey, gid, members) {
   const st = await gLoadState(me, gid);
@@ -159,35 +318,33 @@ export async function gSyncKeys(me, myKey, gid, members) {
   if (isNewSender) {
     st.mySender = await gSenderInit();
     st.distributedTo = {}; // nouvelle clé → re-distribuer à tous
+    st.publishedTo = {};
   }
   if (!st.distributedTo) st.distributedTo = {};
+  if (!st.publishedTo) st.publishedTo = {};
   const others = members.filter((h) => h !== me);
+  // (0) canal de groupe : publier ma clé + relever celles déposées pour moi.
+  // C'est LE chemin qui fonctionne entre membres non-contacts.
+  await gPublishSenderKey(gid, st, others);
+  await gCollectSenderKeys(gid, st);
+  // Le chemin 1:1 ci-dessous coûte N requêtes ET est rejoué à CHAQUE événement
+  // temps réel (qui déclenche un refresh du groupe) → risque de saturation
+  // (HTTP 429). On le limite à une passe toutes les 20 s ; le canal de groupe
+  // ci-dessus, lui, reste toujours actif (il est bon marché et doit rester réactif).
+  if (Date.now() - (st.lastScanAt || 0) < 20000) { await gSaveState(me, gid, st); return st; }
+  st.lastScanAt = Date.now();
   // (1) envoyer ma SKDM aux membres QUI NE L'ONT PAS ENCORE REÇUE. Sans ce
   // filtre, chaque ouverture du groupe re-broadcaste un paquet de contrôle SKDM
   // qui pollue le chat 1:1 (cf. régression observée 11:23).
-  const targets = others.filter((h) => !st.distributedTo[h]);
-  if (targets.length) {
+  const distribute = async (targets) => {
+    if (!targets.length) return;
     const payload = SKD_PREFIX + JSON.stringify({ gid, dist: gSenderDist(st.mySender) });
     for (const h of targets) {
-      try {
-        if (md) {
-          const fo = await md.fanoutEncrypt(me, myKey, h, payload).catch(() => null);
-          if (fo) {
-            await api(`/api/messages/${encodeURIComponent(h)}`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json", "x-access-key": myKey, "x-device-id": md.deviceId() },
-              body: JSON.stringify({ clientMsgId: fo.clientMsgId, envelopes: fo.envelopes }),
-            });
-            st.distributedTo[h] = Date.now();
-            continue;
-          }
-        }
-        const r = await ratchetSend(me, myKey, h, null, payload);
-        if (!r) await e2eEncryptSend(me, myKey, h, payload);
-        st.distributedTo[h] = Date.now();
-      } catch {}
+      if (await gSendControl(me, myKey, h, payload)) st.distributedTo[h] = Date.now();
     }
-  }
+  };
+  await distribute(others.filter((h) => !st.distributedTo[h]));
+  const redistribute = new Set(); // pairs ayant demandé (SKR) notre sender key
   // (2) lire les SKDM reçus de chaque membre dans la conv 1-à-1.
   // IMPORTANT : passer x-device-id pour récupérer NOS enveloppes per-appareil
   // (sinon le serveur sert le legacy mono-session et les enveloppes fan-out
@@ -213,10 +370,18 @@ export async function gSyncKeys(me, myKey, gid, members) {
             const o = JSON.parse(txt.slice(SKD_PREFIX.length));
             if (o.gid === gid && o.dist) st.peers[h] = gPeerFromDist(o.dist);
           } catch {}
+        } else if (typeof txt === "string" && txt.startsWith(SKR_PREFIX)) {
+          // Le pair n'a pas (ou plus) notre sender key → il faut la lui renvoyer.
+          try {
+            const o = JSON.parse(txt.slice(SKR_PREFIX.length));
+            if (o.gid === gid) { delete st.distributedTo[h]; redistribute.add(h); }
+          } catch {}
         }
       }
     } catch {}
   }
+  // (3) honorer les demandes de redistribution reçues à l'étape (2).
+  if (redistribute.size) await distribute([...redistribute]);
   await gSaveState(me, gid, st);
   return st;
 }
@@ -289,6 +454,11 @@ export async function gLoadMessages(me, myKey, gid) {
     });
   }
   await gSaveState(me, gid, st); // peers avancés persistés
+  // Auto-réparation : pour chaque expéditeur dont on n'a pas la sender key, on lui
+  // demande de la redistribuer (best-effort, throttlé) — sinon ses messages
+  // resteraient bloqués indéfiniment sur « en attente de la clé de @x ».
+  const missing = out.filter((m) => m.pending && !st.peers[m.sender]).map((m) => m.sender);
+  if (missing.length) gRequestSenderKeys(me, myKey, gid, missing).catch(() => {});
   return { me: d.me, ttlHours: d.ttlHours, messages: out };
 }
 

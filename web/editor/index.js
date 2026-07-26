@@ -1707,8 +1707,9 @@ export function requestsHtml(requests) {
         ${r.email ? `<div class="req-meta"><a href="mailto:${esc(r.email)}">${esc(r.email)}</a></div>` : ""}
         ${r.message ? `<div class="req-msg">${esc(r.message)}</div>` : ""}
         <div class="req-actions">
+          ${r.status === "pending" ? `
           <button class="btn sm" data-req-accept="${r.id}">${t("eix_accept")}</button>
-          <button class="btn sm" data-req-decline="${r.id}">${t("eix_refuse")}</button>
+          <button class="btn sm" data-req-decline="${r.id}">${t("eix_refuse")}</button>` : ""}
           <button class="icon" data-req-del="${r.id}" title="${t("com_delete")}">✕</button>
         </div>
       </li>`;
@@ -2146,7 +2147,7 @@ export function wireEditor(data) {
   app.querySelector("#qr-btn")?.addEventListener("click", () =>
     openQR(`${location.origin}${data.publicUrl}`, `@${data.handle}`)
   );
-  app.querySelector("#hm-qr-btn")?.addEventListener("click", () =>
+  app.querySelector("#lt-qr-btn")?.addEventListener("click", () =>
     openQR(`${location.origin}${data.publicUrl}`, `@${data.handle}`)
   );
   // Tous les toggles data-setting (banner + onglet Options)
@@ -2581,20 +2582,34 @@ export function wireEditor(data) {
             <button type="button" class="btn sm" id="mg-back" aria-label="${t("eix_back_to_conv")}">← ${t("com_back")}</button>
           </div>
           <div class="comm-form-body">
+            <!-- Renommage (admin/owner) — masqué tant que le rôle n'est pas connu. -->
+            <div class="comm-form-field" id="mg-rename-field" hidden>
+              <label class="comm-form-label" for="mg-name">${t("eix_group_name")}</label>
+              <div class="add-row" style="grid-template-columns:1fr auto">
+                <input id="mg-name" type="text" maxlength="80" autocomplete="off" />
+                <button type="button" class="btn sm" id="mg-rename">${t("eix_rename")}</button>
+              </div>
+            </div>
             <div class="comm-form-field">
               <span class="comm-form-label">${t("eix_current_members")} (<span id="mg-count">…</span>)</span>
               <ul class="ng-list" id="mg-members"><li class="ng-list-empty">${t("com_loading")}</li></ul>
             </div>
-            <div class="comm-form-field">
+            <!-- Ajout de membre : admin/owner uniquement (masqué sinon). -->
+            <div class="comm-form-field" id="mg-add-field" hidden>
               <span class="comm-form-label">${t("eix_add_member")}</span>
               <div class="ng-picker">
                 <input id="mg-search" type="text" placeholder="${t("eix_search_contacts_ph")}" autocomplete="off" />
               </div>
               <small class="comm-form-hint">${t("eix_type_handle_hint")}</small>
             </div>
-            <div class="ng-list-wrap">
+            <div class="ng-list-wrap" id="mg-list-wrap" hidden>
               <div class="ng-list-head" id="mg-list-head">${t("eix_available_contacts")}</div>
               <ul class="ng-list" id="mg-list" role="listbox"></ul>
+            </div>
+            <!-- Quitter : ouvert à tous les membres. Supprimer : propriétaire seul. -->
+            <div class="comm-form-field" style="margin-top:.8rem;display:flex;gap:.5rem;flex-wrap:wrap">
+              <button type="button" class="btn sm" id="mg-leave">${t("eix_leave_group")}</button>
+              <button type="button" class="btn sm danger" id="mg-delete" hidden>${icon("trash", 14)} ${t("eix_delete_group")}</button>
             </div>
           </div>
         </div>`;
@@ -2606,10 +2621,76 @@ export function wireEditor(data) {
       const listEl = commRight.querySelector("#mg-list");
       const listHead = commRight.querySelector("#mg-list-head");
       const search = commRight.querySelector("#mg-search");
+      const renameField = commRight.querySelector("#mg-rename-field");
+      const nameInp = commRight.querySelector("#mg-name");
+      const renameBtn = commRight.querySelector("#mg-rename");
+      const deleteBtn = commRight.querySelector("#mg-delete");
+      const leaveBtn = commRight.querySelector("#mg-leave");
+      const addField = commRight.querySelector("#mg-add-field");
+      const listWrap = commRight.querySelector("#mg-list-wrap");
+
+      // Quitter le groupe — accessible à TOUT membre. Le serveur refuse au
+      // propriétaire tant qu'il reste d'autres membres (transfert requis) : on
+      // relaie simplement son message d'erreur.
+      leaveBtn?.addEventListener("click", async () => {
+        const label = group?.name || t("eix_group_default");
+        const ok = await confirmDialog(
+          t("eix_leave_group_confirm").replace("{name}", label),
+          { ok: t("eix_leave_group"), cancel: t("com_cancel"), danger: true },
+        );
+        if (!ok) return;
+        try {
+          await host.groups.api.leave(gid);
+          toast(t("eix_group_left"));
+          commRight.innerHTML = appState.commEmptyHtml;
+          await refreshGroupsSidebar();
+        } catch (e) { toast(e.message || t("er_fail")); }
+      });
+
+      // Renommer (admin/owner) : PATCH puis rechargement (le nom se propage aux
+      // autres membres via l'événement temps réel `group` émis par le serveur).
+      async function doRename() {
+        const name = (nameInp.value || "").trim();
+        if (!name || name === group?.name) return;
+        try {
+          await host.groups.api.rename(gid, name);
+          toast(t("eix_group_renamed"));
+          await reload();
+        } catch (e) { toast(e.message || t("er_fail")); }
+      }
+      renameBtn?.addEventListener("click", doRename);
+      nameInp?.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); doRename(); } });
+
+      // Supprimer le groupe (propriétaire) : destructif → confirmation explicite.
+      deleteBtn?.addEventListener("click", async () => {
+        const label = group?.name || t("eix_group_default");
+        const ok = await confirmDialog(
+          t("eix_delete_group_confirm").replace("{name}", label),
+          { ok: t("com_delete"), cancel: t("com_cancel"), danger: true },
+        );
+        if (!ok) return;
+        try {
+          await host.groups.api.remove(gid);
+          toast(t("eix_group_deleted"));
+          // Le groupe n'existe plus : on vide le panneau de droite EXPLICITEMENT
+          // (setMode("groups") serait un no-op si on est déjà sur cet onglet, et
+          // laisserait afficher la gestion d'un groupe supprimé), puis on relit la liste.
+          commRight.innerHTML = appState.commEmptyHtml;
+          await refreshGroupsSidebar();
+        } catch (e) { toast(e.message || t("er_fail")); }
+      });
+
       function renderMembers() {
         if (!group) return;
         const me = group.members.find((m) => m.handle === myHandle);
         const canManage = me?.role === "owner" || me?.role === "admin";
+        // Visibilité par rôle : renommage + ajout de membres = admin/owner ;
+        // suppression = propriétaire seul ; « quitter » = tout le monde.
+        if (renameField) renameField.hidden = !canManage;
+        if (nameInp && document.activeElement !== nameInp) nameInp.value = group.name || "";
+        if (addField) addField.hidden = !canManage;
+        if (listWrap) listWrap.hidden = !canManage;
+        if (deleteBtn) deleteBtn.hidden = me?.role !== "owner";
         countEl.textContent = String(group.members.length);
         titleEl.innerHTML = `${icon("users", 18)} ${esc(group.name || t("eix_group_default"))} <span class="deg" style="font-size:.72rem;font-weight:500">${t("eix_encrypted_badge")}</span>`;
         membersEl.innerHTML = group.members.map((m) => {
@@ -2700,7 +2781,8 @@ export function wireEditor(data) {
         } catch (e) { membersEl.innerHTML = `<li class="ng-list-empty">${esc(e.message || t("eix_error"))}</li>`; }
       }
       await reload();
-      search.focus({ preventScroll: true });
+      // Ne prend le focus que si le champ d'ajout est réellement visible (admin/owner).
+      if (addField && !addField.hidden) search.focus({ preventScroll: true });
     }
     // (handler du bouton ＋ unifié dans setMode/newAction plus haut)
     async function refreshGroupsSidebar() {
@@ -4009,6 +4091,19 @@ export function wireEditor(data) {
     applyReqFilter(activeReqFilter());
   };
 
+  // Un RDV traité n'est plus « en attente » : on répercute le nouveau statut sur
+  // la donnée en cache (data.requests / data.pending) pour que la bannière
+  // « en attente de réponse » et le badge Agenda restent justes sur les autres
+  // onglets (rendus depuis ce même cache), sans reload.
+  const syncPending = () => {
+    const p = (data.requests || []).filter((r) => r.status === "pending").length;
+    data.pending = p;
+    document.querySelectorAll("[data-agenda-badge]").forEach((el) => {
+      if (p) { el.textContent = p > 99 ? "99+" : String(p); el.hidden = false; }
+      else { el.textContent = ""; el.hidden = true; }
+    });
+  };
+
   const setStatus = async (id, status, btn) => {
     await api(`/api/requests/${id}`, { method: "PATCH", headers: jsonAuth(), body: JSON.stringify({ status }) });
     const li = btn.closest("li.request");
@@ -4017,7 +4112,12 @@ export function wireEditor(data) {
       const badge = li.querySelector(".req-status");
       const [cls, label] = STATUS_BADGE[status] || STATUS_BADGE.pending;
       if (badge) { badge.className = `req-status ${cls}`; badge.textContent = label; }
+      // Une demande traitée ne propose plus Accepter/Refuser (seul le ✕ reste).
+      li.querySelectorAll("[data-req-accept],[data-req-decline]").forEach((el) => el.remove());
     }
+    const rec = (data.requests || []).find((r) => String(r.id) === String(id));
+    if (rec) rec.status = status;
+    syncPending();
     refreshReqChips();
     toast(status === "accepted" ? t("eix_request_accepted") : t("eix_request_declined"));
   };
@@ -4031,6 +4131,8 @@ export function wireEditor(data) {
     b.addEventListener("click", async () => {
       await api(`/api/requests/${b.dataset.reqDel}`, { method: "DELETE", headers: authHeaders() });
       b.closest("li.request")?.remove();
+      data.requests = (data.requests || []).filter((r) => String(r.id) !== String(b.dataset.reqDel));
+      syncPending();
       refreshReqChips();
       toast(t("eix_request_deleted"));
     })

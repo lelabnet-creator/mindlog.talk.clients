@@ -5094,6 +5094,38 @@ footer a { text-decoration: none; }
   .call-orb-ring { opacity: .3; }
 }
 .call-name { font-size: 1.2rem; font-weight: 600; }
+
+/* ---- Sync inter-appareils : orbe « Milo + ondes radio » (coin bas-droite) ---- */
+.sync-dock {
+  position: fixed; right: 16px; bottom: 16px; z-index: 350;
+  display: flex; align-items: center; gap: .6rem;
+  padding: .5rem .8rem .5rem .5rem;
+  background: var(--card); border: 1px solid var(--line); border-radius: 999px;
+  box-shadow: 0 10px 28px -10px rgba(0,0,0,.5);
+  animation: fadein .25s ease;
+}
+.sync-orb { position: relative; width: 46px; height: 46px; display: grid; place-items: center; flex: none; }
+.sync-orb-sm { width: 40px; height: 40px; margin: 0 auto .4rem; }
+.sync-milo, .sync-orb > svg { position: relative; z-index: 1; display: block; }
+/* Ondes radio : anneaux concentriques qui se propagent depuis Milo. */
+.sync-wave {
+  position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; margin: -22px 0 0 -22px;
+  border-radius: 50%; border: 2px solid var(--accent, #5B5FC7);
+  animation: sync-radio 2s cubic-bezier(.22,.61,.36,1) infinite;
+}
+.sync-wave:nth-child(2) { animation-delay: .66s; }
+.sync-wave:nth-child(3) { animation-delay: 1.33s; }
+@keyframes sync-radio {
+  0%   { transform: scale(.6); opacity: .7; }
+  70%  { opacity: 0; }
+  100% { transform: scale(2.3); opacity: 0; }
+}
+.sync-label { font-size: .82rem; color: var(--muted, #8a90a2); font-weight: 600; white-space: nowrap; }
+.sync-sas {
+  font-size: 1.8rem; letter-spacing: .25rem; margin: .8rem 0; padding: .6rem;
+  background: var(--accent-soft); border-radius: var(--r-md); user-select: all;
+}
+@media (prefers-reduced-motion: reduce) { .sync-wave { animation: none; opacity: .3; } }
 .call-status { color: var(--muted); font-size: .95rem; }
 .call-e2e { color: var(--muted); font-size: .8rem; opacity: .8; }
 .call-ring-actions { display: flex; gap: .6rem; margin-top: .8rem; }

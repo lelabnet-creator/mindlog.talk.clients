@@ -46,6 +46,11 @@ export async function api(path, opts = {}) {
   if (!res.ok) {
     const err = new Error(data?.error || res.statusText);
     err.status = res.status; // permet de distinguer les cas (403 accès, 402 premium…)
+    // Motif STABLE et non traduit (ex. "awaiting_them"). Sans lui, les appelants
+    // en étaient réduits à deviner par regex sur le message français du serveur —
+    // ce qui cassait dès qu'une traduction changeait.
+    if (data?.reason) err.reason = data.reason;
+    if (data?.handle) err.handle = data.handle;
     throw err;
   }
   return data;

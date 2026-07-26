@@ -7,8 +7,8 @@ import { ATT_PREFIX, attachEncryptUpload, attachDownloadDecrypt, attachPayload, 
 import { ensureE2E, e2eEncrypt, e2eDecrypt } from "./crypto/e2e.js";
 import { e2eVaultGet, e2eVaultPut, e2eSaveVault, e2eRestoreVault } from "./crypto/vault.js";
 import { isRatchetCiphertext, rAesDec, rAesEnc, rConcat, rEq, rIdbGet, rIdbPut, rKdfCk, rKdfMk, rPublicOf, rRawPub, ratchetDecrypt, ratchetEnsurePrekeys, ratchetRecallSent, ratchetSend } from "./crypto/ratchet.js";
-import { mdDecryptEnvelope, mdDeviceId, mdFanoutEncrypt, mdRecallSent, mdRegisterDevice, mdSelfDecrypt } from "./crypto/multidevice.js";
-import { gApi, gAttachDownload, gAttachUpload, gLoadMessages, gRotate, gSendMessage, gSyncKeys } from "./crypto/groups.js";
+import { mdDecryptEnvelope, mdDeviceId, mdFanoutEncrypt, mdRecallSent, mdRegisterDevice, mdSelfDecrypt, mdSelfEncrypt } from "./crypto/multidevice.js";
+import { gAbsorbSkd, gApi, gAttachDownload, gAttachUpload, gLoadMessages, gRotate, gSendMessage, gSyncKeys } from "./crypto/groups.js";
 import { groupDigits, safetyNumber, sha256hex, verifyClear, verifyGet, verifyPut } from "./crypto/verify.js";
 import { CREDIT, LANG, RTL, langSelectHtml, setLangCode, t } from "./i18n.js";
 import { confirmDialog, copyText, esc, promptDialog, promptPassphrase, promptPin, toast } from "./ui/dom.js";
@@ -24,6 +24,21 @@ import { logActivity, logFailure } from "./activity-log.js";
 function setLang(code) { setLangCode(code); route(); }
 
 const footer = document.getElementById("footer");
+
+// Jeton de build : soit `__V__` stampé par l'edge (epoch SECONDES du build de
+// l'image), soit `assetVersion`/`STARTED_AT` du backend (epoch MILLISECONDES) en
+// repli dev. Renvoie le jeton brut + la date/heure lisible, ou null si absent
+// (placeholder `__V__` non substitué ou config indisponible).
+export function buildInfo() {
+  const raw = window.__APP_V__;
+  const n = Number(raw);
+  if (!raw || String(raw).startsWith("__") || !Number.isFinite(n) || n <= 0) return null;
+  const ms = n < 1e12 ? n * 1000 : n; // < ~2001 en ms → c'est un stamp en secondes
+  return {
+    build: String(raw),
+    date: new Date(ms).toLocaleString(LANG, { dateStyle: "medium", timeStyle: "short" }),
+  };
+}
 
 // Clé de site Cloudflare Turnstile (publique), injectée dans le HTML par le
 // serveur. Vide si non configurée ou placeholder non substitué (dev sans .env).
@@ -127,7 +142,9 @@ applyTheme(storedTheme() || "dark");
 /* ----------------------- Temps réel (SSE) côté client -------------------- */
 let _es = null;
 let _esKey = null;
-const _sse = { notif: new Set(), message: new Set(), ack: new Set(), signal: new Set(), device: new Set(), group: new Set() };
+// Auto-extensible : un plugin peut s'abonner à un type inconnu du shell (mixe
+// shell en cache + plugins frais) sans faire crasher son enregistrement.
+const _sse = { notif: new Set(), message: new Set(), ack: new Set(), signal: new Set(), device: new Set(), group: new Set(), "call-handled": new Set(), sync: new Set() };
 function connectSSE(key) {
   // key fourni → mode lien (?key=) ; null/undefined → mode session cookie.
   const tag = key || "cookie";
@@ -139,7 +156,7 @@ function connectSSE(key) {
   // (Re)connexion du flux temps réel → le serveur vient peut-être d'être redéployé :
   // bon moment pour comparer la version client/serveur (cf. bandeau de mise à jour).
   _es.onopen = () => { void checkAppVersion(); };
-  ["notif", "message", "ack", "signal", "device", "group"].forEach((ev) =>
+  Object.keys(_sse).forEach((ev) =>
     _es.addEventListener(ev, (e) => {
       let d = {};
       try {
@@ -150,6 +167,7 @@ function connectSSE(key) {
   );
 }
 const onSSE = (type, fn) => {
+  if (!_sse[type]) _sse[type] = new Set(); // type inconnu → créé (ne crashe jamais)
   _sse[type].add(fn);
   return () => _sse[type].delete(fn);
 };
@@ -507,7 +525,8 @@ function headerAccount(unread = 0, isPrem = appState.me?.plan === "premium") {
   const avHtml = photoSrc
     ? `<img class="profile-chip-av" src="${esc(photoSrc)}" alt="" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" /><div class="profile-chip-av profile-chip-svg" style="display:none">${genericAvatarSvg(h, initial)}</div>`
     : `<div class="profile-chip-av profile-chip-svg">${genericAvatarSvg(h, initial)}</div>`;
-  return `<div class="profile-menu-wrap">
+  return `<button class="profile-chip profile-chip--icon hm-qr-btn" id="hm-qr-btn" type="button" aria-label="${t("qr_add_friend_aria")}" title="${t("qr_add_friend")}">${icon("qr", 18)}</button>
+  <div class="profile-menu-wrap">
     <button class="profile-chip profile-chip--icon${isPrem ? " is-premium" : ""}" id="profile-menu-btn" type="button" aria-expanded="false" aria-haspopup="menu" aria-label="${t("apx_account_aria").replace("{handle}", esc(h))}${isPrem ? " · Premium" : ""}" title="@${esc(h)}${isPrem ? " · Premium" : ""}">
       ${avHtml}
       ${isPrem ? `<span class="profile-chip-crown" aria-hidden="true">${crownSvg()}</span>` : ""}
@@ -520,6 +539,7 @@ function headerAccount(unread = 0, isPrem = appState.me?.plan === "premium") {
       <div class="pmenu-sep" role="separator"></div>
       <button class="pmenu-item" id="pmenu-theme" role="menuitem" type="button">${storedTheme() === "light" ? icon("moon", 15) + " " + t("apx_dark_mode") : icon("sun", 15) + " " + t("apx_light_mode")}</button>
       <button class="pmenu-item" id="pmenu-options" role="menuitem" type="button">${icon("settings", 15)} ${t("apx_options")}</button>
+      <button class="pmenu-item" id="pmenu-connect-device" role="menuitem" type="button">${icon("shield", 15)} ${t("apx_connect_device")}</button>
       <div class="pmenu-sep" role="separator"></div>
       <button class="pmenu-item pmenu-danger" data-action="logout" role="menuitem" type="button">${icon("key", 15)} ${t("nav_logout")}</button>
     </div>
@@ -548,13 +568,65 @@ function wireGlobalLogout() {
   });
 }
 
+// « Connecter un appareil » : génère un PIN d'appairage à USAGE UNIQUE côté
+// serveur et l'affiche en QR. L'app mobile scanne `mindlog-pin:<pin>` → redeem-pin
+// → connectée d'un coup, sans ressaisie de clé. Le PIN expire (cf. expiresAt).
+async function openConnectDevice() {
+  try {
+    const first = await api("/api/auth/pin", { method: "POST", headers: jsonAuth() });
+    if (!first?.pin) throw new Error(t("connect_device_err"));
+    // Le PIN est à usage unique ET expire : on affiche un compte à rebours et on
+    // régénère automatiquement un nouveau PIN avant l'expiration (via openQR),
+    // pour ne jamais présenter un QR périmé qui échouerait au scan.
+    openQR("mindlog-pin:" + first.pin, t("connect_device_label"), {
+      expiresAt: first.expiresAt,
+      refresh: async () => {
+        const r = await api("/api/auth/pin", { method: "POST", headers: jsonAuth() });
+        return { url: "mindlog-pin:" + r.pin, expiresAt: r.expiresAt };
+      },
+    });
+  } catch (e) {
+    toast(e?.message || t("connect_device_err"));
+  }
+}
+
+// « Ajouter un ami » : génère une invitation à USAGE UNIQUE côté serveur et
+// affiche son lien `/i/<token>` en QR. Un ami le scanne (appareil photo → ouvre
+// le lien → renderInvite → accepte) : la relation devient MUTUELLE d'un coup
+// (cf. POST /api/invites/:token/accept, backend social.ts). Réutilise openQR.
+async function openInvite() {
+  try {
+    const { token } = await api("/api/invites", {
+      method: "POST",
+      headers: jsonAuth(),
+      body: JSON.stringify({ type: "amis" }),
+    });
+    if (!token) throw new Error(t("qr_add_err"));
+    openQR(`${location.origin}/i/${encodeURIComponent(token)}`, t("qr_add_friend"));
+  } catch (e) {
+    toast(e?.message || t("qr_add_err"));
+  }
+}
+
 const _pmenu = {
+  _lastToggle: 0,
   getWrap:  () => document.querySelector(".profile-menu-wrap"),
   getBtn:   () => document.getElementById("profile-menu-btn"),
   isOpen:   () => !!document.querySelector(".profile-menu-wrap.open"),
   open()  { this.getWrap()?.classList.add("open");    this.getBtn()?.setAttribute("aria-expanded", "true");  },
   close() { this.getWrap()?.classList.remove("open"); this.getBtn()?.setAttribute("aria-expanded", "false"); },
-  toggle(){ this.isOpen() ? this.close() : this.open(); },
+  toggle(){
+    // Le bouton avatar est câblé DEUX fois : délégation en capture (wireProfileMenu)
+    // ET handler direct ré-attaché à chaque rendu (wireProfileMenuBtn, fallback si
+    // la délégation est bloquée). Un même clic traverse donc toggle() deux fois
+    // (capture ouvre → bulle referme) et le menu ne s'affichait plus. On dédoublonne
+    // sur une courte fenêtre : un seul basculement net par clic (un vrai second clic
+    // humain est bien au-delà de 200 ms).
+    const now = Date.now();
+    if (now - this._lastToggle < 200) return;
+    this._lastToggle = now;
+    this.isOpen() ? this.close() : this.open();
+  },
 };
 
 let _profileMenuWired = false;
@@ -564,6 +636,7 @@ function wireProfileMenu() {
 
   // capture:true → avant tout stopPropagation des listeners enfants
   document.addEventListener("click", (e) => {
+    if (e.target.closest("#hm-qr-btn")) { openInvite(); return; }
     if (e.target.closest("#profile-menu-btn")) { _pmenu.toggle(); return; }
     // Hors éditeur (homepage /@h, /me/premium, etc.), `__deckGoLabel` n'existe
     // pas → on navigue vers /me en posant un indice d'onglet via sessionStorage
@@ -590,6 +663,7 @@ function wireProfileMenu() {
       _pmenu.close(); return;
     }
     if (e.target.closest("#pmenu-options")) { goTab("Options"); _pmenu.close(); return; }
+    if (e.target.closest("#pmenu-connect-device")) { _pmenu.close(); openConnectDevice(); return; }
     if (e.target.closest("#pmenu-premium")) { _pmenu.close(); location.assign("/me/premium"); return; }
     if (!e.target.closest(".profile-menu-wrap")) _pmenu.close();
   }, true);
@@ -704,9 +778,14 @@ function route() {
   const spaceIndex = path.match(/^\/@([^/]+)\/space$/); // index espace privé : /@handle/space
   const profile = path.match(/^\/@(.+)$/);
   const priv = path.match(/^\/k\/(.+)$/);
+  const magic = path.match(/^\/i\/m\/(.+)$/); // lien magique de connexion : /i/m/<pin>
   const invite = path.match(/^\/i\/(.+)$/);
   footer.innerHTML = "";
   deckState.index = 0; // chaque vue démarre sur le 1er panneau
+  if (magic) {
+    app.dataset.view = "magic";
+    return renderMagicLogin(magic[1]);
+  }
   if (invite) {
     app.dataset.view = "invite";
     return renderInvite(invite[1]);
@@ -747,6 +826,36 @@ function route() {
   }
   app.dataset.view = "landing";
   return renderLanding();
+}
+
+/* ============================ LIEN MAGIQUE ============================== */
+// Connexion par lien magique reçu par email (`/i/m/<pin>`). Le PIN est à usage
+// unique : on l'échange contre la clé d'accès (redeem-pin), on la mémorise, puis
+// on bascule sur l'espace privé. Le même écran est aussi ce que l'App Link
+// Android ouvre côté mobile.
+async function renderMagicLogin(pin) {
+  app.innerHTML = `<div class="auth-shell"><div class="auth-card">
+    <h1>${t("magic_signing_in")}</h1>
+    <p class="sub" id="magic-msg">${t("magic_wait")}</p>
+  </div></div>`;
+  try {
+    const res = await api("/api/auth/redeem-pin", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pin }),
+    });
+    if (!res?.accessKey) throw new Error(t("magic_err"));
+    setStoredKey(res.accessKey);
+    if (res.handle) setStoredHandle(res.handle);
+    location.replace("/k/" + encodeURIComponent(res.accessKey));
+  } catch (e) {
+    const msg = document.getElementById("magic-msg");
+    if (msg) {
+      msg.textContent = e?.message || t("magic_err");
+      msg.insertAdjacentHTML("afterend",
+        `<p style="margin-top:1rem"><a class="btn sm primary" href="/app">${t("magic_retry")}</a></p>`);
+    }
+  }
 }
 
 /* ============================== INVITATION =============================== */
@@ -1040,7 +1149,7 @@ function sovereignColHtml() {
 
   // Côté « page d'identité » (link-in-bio / carte de visite).
   const idTable = cmpTable(
-    ["mindlog · id", "Linktree", "Carrd", "HiHello", "Popl"],
+    ["mindlog.talk", "Linktree", "Carrd", "HiHello", "Popl"],
     [
       ["cmpf_page", ["y", "y", "y", "y", "y"]],
       ["cmpf_card", ["y", "p", "p", "y", "y"]],
@@ -1057,7 +1166,7 @@ function sovereignColHtml() {
 
   // Côté « messagerie » (chat/appels chiffrés).
   const msgTable = cmpTable(
-    ["mindlog · id", "WhatsApp", "Signal", "Telegram", "Olvid"],
+    ["mindlog.talk", "WhatsApp", "Signal", "Telegram", "Olvid"],
     [
       ["cmpf_chat", ["y", "y", "y", "p", "y"]],
       ["cmpf_call", ["y", "y", "y", "y", "y"]],
@@ -1100,6 +1209,26 @@ function sovereignColHtml() {
 // Vue « /app » : point d'entrée d'authentification, découplé de la vitrine
 // (servie à « / » par un site statique séparé). Affiche directement la fenêtre
 // de connexion — évite l'ancienne boucle /app → /me → /.
+// Connexion par email (lien magique) : on saisit l'email, le serveur envoie un
+// lien `/i/m/<pin>` à usage unique. Anti-énumération → toujours « vérifie ta
+// boîte ». Sans SMTP (dev/qualif non configurée) l'API renvoie le lien en clair.
+async function openEmailLogin() {
+  const email = await promptDialog(t("auth_email_login"), {
+    placeholder: t("auth_email_ph"), ok: t("auth_email_send"), type: "email",
+  });
+  if (!email) return;
+  try {
+    const res = await api("/api/auth/magic-link", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+    toast(res?.devLink || t("auth_email_sent"));
+  } catch (e) {
+    toast(e?.message || t("auth_email_err"));
+  }
+}
+
 function renderAuth() {
   // Déjà connecté (cookie de session) ou ancienne clé mémorisée → espace privé.
   if (!_autoReconnectTried && (sessionHint() || storedKey())) {
@@ -1118,15 +1247,23 @@ function renderAuth() {
       <div class="auth-actions">
         <button class="btn primary chameleon" id="auth-login">${icon("key", 16)} ${t("login")}</button>
         <button class="btn" id="auth-create">${icon("user", 16)} ${t("create")}</button>
+        <button class="btn ghost" id="auth-email">${icon("mail", 15)} ${t("auth_email_login")}</button>
       </div>
     </div>
     <footer class="app-foot" aria-label="${t("apx_version_credits")}">
       <span>mindlog.talk <b>v${window.__APP_VERSION__ || "?"}</b></span>
+      ${(() => {
+        const bi = buildInfo();
+        return bi
+          ? `<span class="sep">·</span><span class="app-foot-build" title="build ${esc(bi.build)}">build ${esc(bi.build)} · ${esc(bi.date)}</span>`
+          : "";
+      })()}
       <span class="sep">·</span>
       <span>${t("apx_a_project_by")} <a href="https://le-lab.net" target="_blank" rel="noopener noreferrer">le-lab.net</a></span>
     </footer>`;
   app.querySelector("#auth-login").addEventListener("click", openRecover);
   app.querySelector("#auth-create").addEventListener("click", openCreate);
+  app.querySelector("#auth-email").addEventListener("click", openEmailLogin);
   // Accueil affiché par défaut ; la modale de connexion ne s'ouvre qu'au clic
   // sur « Se connecter » (auparavant openRecover() était appelé d'emblée).
 }
@@ -1193,7 +1330,7 @@ function renderLanding() {
         </div>
 
         <div class="hero-visual" aria-hidden="true">
-          <svg class="hero-phone" viewBox="0 0 360 740" width="360" height="740" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="mindlog · id">
+          <svg class="hero-phone" viewBox="0 0 360 740" width="360" height="740" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="mindlog.talk">
             <defs>
               <clipPath id="phone-screen"><rect x="14" y="14" width="332" height="712" rx="30" ry="30"/></clipPath>
               <linearGradient id="phone-bezel" x1="0" y1="0" x2="0" y2="1">
@@ -1367,7 +1504,7 @@ function renderLanding() {
 
       <footer class="lp-footer">
         <div class="about-col">
-          <a class="brand" href="/" style="justify-content:center"><span class="brand-milo">${miloSvg(44)}</span> mindlog · id</a>
+          <a class="brand" href="/" style="justify-content:center"><span class="brand-milo">${miloSvg(44)}</span> mindlog.talk</a>
           <p class="sub" style="text-align:center;margin-top:.6rem">${CREDIT()}</p>
           <nav class="about-links">
             <a href="${GITHUB_URL}" target="_blank" rel="noopener">${t("source")}</a>
@@ -1741,7 +1878,7 @@ function renderSimpleLanding(landingHandle) {
 
       <footer class="lp-footer">
         <div class="about-col">
-          <a class="brand" href="/" style="justify-content:center"><span class="brand-milo">${miloSvg(44)}</span> mindlog · id</a>
+          <a class="brand" href="/" style="justify-content:center"><span class="brand-milo">${miloSvg(44)}</span> mindlog.talk</a>
           <p class="sub" style="text-align:center;margin-top:.6rem">${CREDIT()}</p>
           <nav class="about-links">
             <a href="${GITHUB_URL}" target="_blank" rel="noopener">${t("source")}</a>
@@ -2461,6 +2598,19 @@ function openCreate() {
       errEl.textContent = t("cr_ack_err");
       return;
     }
+    // Sans email de récupération, la perte de la clé privée = compte irrécupérable.
+    // On demande une confirmation explicite avant de créer sans filet de secours.
+    if (
+      !email.trim() &&
+      !(await confirmDialog(t("cr_no_email_confirm"), {
+        ok: t("cr_no_email_ok"),
+        cancel: t("cr_no_email_cancel"),
+        danger: true,
+      }))
+    ) {
+      overlay.querySelector("#cr-email").focus();
+      return;
+    }
     try {
       const r = await api("/api/identities", {
         method: "POST",
@@ -2594,7 +2744,7 @@ function buildEmailSignature(data, url) {
     phone,
     site,
     location,
-    `${url} (mindlog · id)`,
+    `${url} (mindlog.talk)`,
   ].filter(Boolean).join("\n");
 
   // -- HTML (styles inline : seuls fiables dans les clients mail) --
@@ -2634,7 +2784,12 @@ async function copyRichSignature(sig) {
   }
 }
 
-function openQR(url, label) {
+// Affiche un QR (partage de page, invitation, appairage d'appareil…).
+// `opts.expiresAt` (ISO) + `opts.refresh` (async → { url, expiresAt }) activent un
+// COMPTE À REBOURS et un rafraîchissement AUTOMATIQUE avant expiration : utilisé
+// pour le PIN d'appairage à usage unique, qui expire (on ne veut jamais afficher
+// un code périmé). Sans ces options, comportement statique inchangé.
+function openQR(url, label, opts = {}) {
   const overlay = document.createElement("div");
   overlay.className = "overlay";
   overlay.innerHTML = `
@@ -2643,39 +2798,78 @@ function openQR(url, label) {
       <h2 id="qr-title">${t("qr_share").replace("{label}", esc(label))}</h2>
       <p class="sub">${t("qr_sub")}</p>
       <div class="qr-box" id="qr-box"></div>
-      <div class="url-row"><code>${esc(url)}</code><button class="btn copy" data-copy="${esc(url)}">${t("com_copy")}</button></div>
+      ${opts.refresh ? `<p class="sub" id="qr-timer" aria-live="polite" style="margin:.5rem 0 0;font-variant-numeric:tabular-nums;opacity:.8"></p>` : ""}
+      <div class="url-row"><code id="qr-code">${esc(url)}</code><button class="btn copy" id="qr-copy">${t("com_copy")}</button></div>
       <div class="actions"><a class="btn primary" id="qr-dl" download="mindlog-qr.png">${t("qr_download")}</a></div>
     </div>`;
   document.body.appendChild(overlay);
-  const close = () => overlay.remove();
-  overlay.addEventListener("click", (e) => e.target === overlay && close());
-  overlay.querySelector("#qr-close").addEventListener("click", close);
-  overlay.querySelector(".copy").addEventListener("click", () => {
-    copyText(url);
-    toast(t("com_copied"));
-  });
 
   const box = overlay.querySelector("#qr-box");
   const dl = overlay.querySelector("#qr-dl");
-  if (window.QRCode) {
-    new window.QRCode(box, {
-      text: url,
-      width: 200,
-      height: 200,
-      colorDark: "#0f1115",
-      colorLight: "#ffffff",
-      correctLevel: window.QRCode.CorrectLevel.M,
-    });
-    setTimeout(() => {
-      const img = box.querySelector("img");
-      const canvas = box.querySelector("canvas");
-      const src = img?.src || canvas?.toDataURL("image/png");
-      if (src) dl.href = src;
-      else dl.style.display = "none";
-    }, 200);
-  } else {
-    box.innerHTML = `<p class="sub" style="padding:2rem 0">${t("qr_unavailable")}</p>`;
-    dl.style.display = "none";
+  const codeEl = overlay.querySelector("#qr-code");
+  let currentUrl = url;
+  let expiresAt = opts.expiresAt ? new Date(opts.expiresAt).getTime() : 0;
+  let timer = null;
+
+  // (Re)dessine le QR + met à jour le code affiché et le lien de téléchargement.
+  const renderQR = (u) => {
+    currentUrl = u;
+    if (codeEl) codeEl.textContent = u;
+    box.innerHTML = "";
+    if (window.QRCode) {
+      new window.QRCode(box, {
+        text: u, width: 200, height: 200,
+        colorDark: "#0f1115", colorLight: "#ffffff",
+        correctLevel: window.QRCode.CorrectLevel.M,
+      });
+      setTimeout(() => {
+        const img = box.querySelector("img");
+        const canvas = box.querySelector("canvas");
+        const src = img?.src || canvas?.toDataURL("image/png");
+        if (src) { dl.href = src; dl.style.display = ""; }
+        else dl.style.display = "none";
+      }, 200);
+    } else {
+      box.innerHTML = `<p class="sub" style="padding:2rem 0">${t("qr_unavailable")}</p>`;
+      dl.style.display = "none";
+    }
+  };
+  renderQR(url);
+
+  const close = () => { if (timer) clearInterval(timer); overlay.remove(); };
+  overlay.addEventListener("click", (e) => e.target === overlay && close());
+  overlay.querySelector("#qr-close").addEventListener("click", close);
+  overlay.querySelector("#qr-copy").addEventListener("click", () => {
+    copyText(currentUrl);
+    toast(t("com_copied"));
+  });
+
+  // Compte à rebours + auto-refresh (code d'appairage à usage unique qui expire).
+  if (opts.refresh) {
+    const timerEl = overlay.querySelector("#qr-timer");
+    const fmt = (ms) => {
+      const s = Math.max(0, Math.ceil(ms / 1000));
+      return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+    };
+    let refreshing = false;
+    const tick = async () => {
+      const left = expiresAt - Date.now();
+      if (timerEl) timerEl.textContent = `⏱ ${fmt(left)}`;
+      // On régénère ~4 s avant l'expiration → le QR affiché est toujours valide.
+      if (!refreshing && (expiresAt === 0 || left <= 4000)) {
+        refreshing = true;
+        try {
+          const next = await opts.refresh();
+          if (next?.url) {
+            expiresAt = next.expiresAt ? new Date(next.expiresAt).getTime() : 0;
+            renderQR(next.url);
+          }
+        } catch { /* on garde l'ancien code, nouvel essai au prochain tick */ }
+        refreshing = false;
+      }
+    };
+    tick();
+    timer = setInterval(tick, 1000);
   }
 }
 
@@ -2768,7 +2962,7 @@ async function renderSpaceIndex(handle) {
           <a class="btn" href="/@${esc(handle)}">${t("spx_see_profile").replace("{handle}", esc(handle))}</a>
         </div>
       </div>`;
-    footer.innerHTML = `<a class="brand" href="/" style="justify-content:center"><span class="brand-milo">${miloSvg(40)}</span> mindlog · id</a>`;
+    footer.innerHTML = `<a class="brand" href="/" style="justify-content:center"><span class="brand-milo">${miloSvg(40)}</span> mindlog.talk</a>`;
     applyTheme(storedTheme() || "dark");
     wireHeaderSearch();
     wireProfileMenuBtn();
@@ -2841,7 +3035,7 @@ async function renderSpaceIndex(handle) {
 
       ${pagesHtml}
     </div>`;
-  footer.innerHTML = `<a class="brand" href="/" style="justify-content:center"><span class="brand-milo">${miloSvg(40)}</span> mindlog · id</a>`;
+  footer.innerHTML = `<a class="brand" href="/" style="justify-content:center"><span class="brand-milo">${miloSvg(40)}</span> mindlog.talk</a>`;
   applyTheme(storedTheme() || "dark");
   wireHeaderSearch();
   wireProfileMenuBtn();
@@ -3285,7 +3479,7 @@ async function renderPaidPage(handle, slug) {
              </div>`}
       </article>
     </div>`;
-  footer.innerHTML = `<a class="brand" href="/" style="justify-content:center"><span class="brand-milo">${miloSvg(40)}</span> mindlog · id</a>`;
+  footer.innerHTML = `<a class="brand" href="/" style="justify-content:center"><span class="brand-milo">${miloSvg(40)}</span> mindlog.talk</a>`;
   applyTheme(storedTheme() || "dark");
   wireBackBtn(app);
   if (data.access) void hydratePaidMedia(data.handle);
@@ -3473,7 +3667,7 @@ async function renderPublicProfile(handle) {
       right: `${_backBtnHtml}${_createCtaHtml}${headerAccount()}`,
     })}
     ${cardViewHtml(data, false, _profileActions)}`;
-  footer.innerHTML = `<a class="brand" href="/" style="justify-content:center"><span class="brand-milo">${miloSvg(40)}</span> mindlog · id</a><p style="margin:.5rem 0 0">${CREDIT()}</p>`;
+  footer.innerHTML = `<a class="brand" href="/" style="justify-content:center"><span class="brand-milo">${miloSvg(40)}</span> mindlog.talk</a><p style="margin:.5rem 0 0">${CREDIT()}</p>`;
 
   wirePubTabs();
   wirePubSwipe();
@@ -4793,6 +4987,12 @@ function notifTime(s) {
   if (isNaN(d)) return "";
   return d.toLocaleString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 }
+// Notifs qui proposent d'ajouter la personne en retour : l'ajout initial
+// (`relation`) et la relance émise quand la réciproque manquante bloque le chat
+// (`relation_nudge`, cf. `chatDenied` côté serveur). Même geste attendu de
+// l'utilisateur → même dialogue, plutôt qu'un second parcours à maintenir.
+const RECIPROCAL_NOTIFS = new Set(["relation", "relation_nudge"]);
+
 function notifItemHtml(n) {
   const inner = `<span class="nt">${esc(n.text)}</span><span class="nd">${esc(notifTime(n.created_at))}</span>`;
   const cls = `notif ${n.read ? "" : "unread"}`;
@@ -4802,7 +5002,7 @@ function notifItemHtml(n) {
     return `<li class="${cls}"><button class="notif-act" data-chat-notif="${esc(h)}">${inner}</button></li>`;
   }
   // Notif "ajout en relation" → popup réciproque avant d'ouvrir le profil.
-  if (n.type === "relation" && n.link && /^\/@[^/]+$/.test(n.link)) {
+  if (RECIPROCAL_NOTIFS.has(n.type) && n.link && /^\/@[^/]+$/.test(n.link)) {
     const h = n.link.replace(/^\/@/, "");
     return `<li class="${cls}"><button class="notif-act" data-relation-notif="${esc(h)}">${inner}</button></li>`;
   }
@@ -4885,7 +5085,7 @@ setupMiloEyes();
 
 // Notifications temps réel : toast + mise à jour de la cloche si l'éditeur est ouvert.
 onSSE("notif", (d) => {
-  if (d?.type === "relation" && d.link && /^\/@[^/]+$/.test(d.link)) {
+  if (RECIPROCAL_NOTIFS.has(d?.type) && d.link && /^\/@[^/]+$/.test(d.link)) {
     const h = d.link.replace(/^\/@/, "");
     // Vérifie en temps réel si la personne est déjà dans nos relations.
     api("/api/me", { headers: authHeaders() }).then((fresh) => {
@@ -4926,6 +5126,24 @@ onSSE("notif", (d) => {
   if (list) {
     if (list.querySelector(".empty")) list.innerHTML = "";
     list.insertAdjacentHTML("afterbegin", notifItemHtml({ ...d, read: 0 }));
+  }
+
+  // Nouvelle demande de RDV : la faire apparaître EN DIRECT (liste RDV, bannière
+  // « en attente de réponse » et badge Agenda) sans que l'utilisateur ait à
+  // recharger. On re-rend la vue privée depuis /api/me — sauf si une modale est
+  // ouverte ou une saisie en cours, auquel cas on se limite à incrémenter le
+  // badge Agenda pour ne pas interrompre l'action en cours.
+  if (d?.type === "request") {
+    const busy = document.querySelector(".overlay.open") ||
+      ["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName || "");
+    if (appState.key && !busy) {
+      renderPrivate(appState.key);
+    } else {
+      document.querySelectorAll("[data-agenda-badge]").forEach((badge) => {
+        badge.hidden = false;
+        badge.textContent = String((parseInt(badge.textContent || "0", 10) || 0) + 1);
+      });
+    }
   }
 });
 
@@ -4997,6 +5215,7 @@ Object.assign(host, {
     register: mdRegisterDevice,
     fanoutEncrypt: mdFanoutEncrypt,
     decryptEnvelope: mdDecryptEnvelope,
+    selfEncrypt: mdSelfEncrypt, // → mes autres appareils (clé self partagée)
     selfDecrypt: mdSelfDecrypt, // message d'un AUTRE de mes appareils (clé self partagée)
     recallSent: mdRecallSent,
   },
@@ -5011,6 +5230,7 @@ Object.assign(host, {
   groups: {
     api: gApi,
     syncKeys: gSyncKeys,
+    absorbSkd: gAbsorbSkd,
     send: gSendMessage,
     load: gLoadMessages,
     rotate: gRotate,
@@ -5085,9 +5305,15 @@ function initGdprBanner() {
 }
 
 (async () => {
+  // Garde ANTI-DOUBLE-BOOT (fenêtre globale, pas variable de module) : si app.js
+  // était évalué une 2e fois sous une autre URL (?v= manquant/différent — cf.
+  // import map d'index.html), la 2e instance ne doit RIEN brancher : double
+  // enregistrement des plugins = double sonnerie d'appel, double listeners, etc.
+  if (window.__ML_APP_BOOTED__) { console.warn("[app] instance dupliquée ignorée (module chargé sous 2 URLs)"); return; }
+  window.__ML_APP_BOOTED__ = true;
   const v = window.__APP_V__ ? `?v=${encodeURIComponent(window.__APP_V__)}` : "";
   initGdprBanner();
-  for (const name of ["calendar", "chat", "gallery", "call", "live", "premium-upsell"]) {
+  for (const name of ["calendar", "chat", "gallery", "call", "live", "sync", "premium-upsell"]) {
     try {
       const mod = await import(`./plugins/${name}.js${v}`);
       mod.default(host);

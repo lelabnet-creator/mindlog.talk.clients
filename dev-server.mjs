@@ -22,7 +22,15 @@ const PORT = Number(process.env.PORT || 3000);
 const proxied = (p) =>
   p === "/mcp" || p.startsWith("/api/") || p.startsWith("/mcp/") ||
   p.startsWith("/oauth/") || p.startsWith("/.well-known/") ||
-  p === "/me/broadcast" || p.startsWith("/internal/") || p.startsWith("/admin");
+  p.startsWith("/internal/") || p.startsWith("/admin");
+
+// Pages live autonomes (HTML dédié, hors shell SPA) — servies par le client
+// depuis la scission (le backend ne les sert plus). Renvoie le fichier ou null.
+function livePage(path) {
+  if (path === "/me/broadcast") return join(ROOT, "live", "broadcast.html");
+  if (/^\/live\/[A-Za-z0-9-]+$/.test(path)) return join(ROOT, "live", "watch.html");
+  return null;
+}
 
 const MIME = {
   ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
@@ -58,6 +66,9 @@ async function sendFile(res, filePath) {
 const server = http.createServer(async (req, res) => {
   let path = decodeURIComponent(new URL(req.url, "http://x").pathname);
   if (proxied(path)) return proxy(req, res);
+
+  const live = livePage(path);
+  if (live) { await sendFile(res, live); return; }
 
   if (path.startsWith("/static/")) path = path.slice("/static".length);
   const rel = normalize(path).replace(/^(\.\.[/\\])+/, ""); // anti path-traversal

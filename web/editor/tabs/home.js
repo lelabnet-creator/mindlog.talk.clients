@@ -128,7 +128,10 @@ export function renderHomeColumn(data, { photo }) {
                 <!-- Écran 1 : Accueil — couverture plein écran + identité en overlay bas -->
                 <section class="lt-screen lt-screen--cover" data-screen="home" aria-label="${t("home_screen_home")}">
                   <div class="lt-cover-full" style="background-image:url('${esc(coverUrl)}')" aria-hidden="true"></div>
-                  <button type="button" class="lt-qr" id="hm-qr-btn" aria-label="${t("home_show_qr")}" title="${t("home_my_qr")}">${icon("qr", 18)}</button>
+                  <!-- id propre (lt-qr-btn) : « hm-qr-btn » entrait en COLLISION avec le
+                       bouton QR du header (app.js) — querySelector accrochait alors le
+                       handler « QR profil » sur le bouton du header → 2 QR au clic. -->
+                  <button type="button" class="lt-qr" id="lt-qr-btn" aria-label="${t("home_show_qr")}" title="${t("home_my_qr")}">${icon("qr", 18)}</button>
                   <div class="lt-identity">
                     ${hmDisplayName ? `<div class="lt-name">${esc(hmDisplayName)}</div>` : ""}
                     <div class="lt-handle${hmDisplayName ? "" : " lt-name"}">@${esc(data.handle)}</div>

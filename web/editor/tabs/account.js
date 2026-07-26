@@ -2,6 +2,7 @@
 // Fusion de l'ex-Accueil (aperçu page publique, stats, events, activité) et de
 // l'ex-Compte (abonnement, sécurité E2E, accès, données).
 import { appState } from "../../state.js";
+import { buildInfo } from "../../app.js";
 import { esc } from "../../ui/dom.js";
 import { icon } from "../../ui/icons.js";
 import { getActivityLog } from "../../activity-log.js";
@@ -339,7 +340,10 @@ export function renderAccountColumn(data, { photo, profileHtml = "", notifsHtml 
             <div class="opt-v2-block opt-v2-account">
               <div class="opt-v2-head">${icon("code", 16)} ${t("acnt_software_brand")}</div>
               <p class="acc-version" style="margin:0 0 .55rem">
-                ${icon("sparkles", 12)} ${t("acc_version_l")} <b>${esc(window.__APP_VERSION__ || "—")}</b>
+                ${icon("sparkles", 12)} ${t("acc_version_l")} <b>${esc(window.__APP_VERSION__ || "—")}</b>${(() => {
+                  const bi = buildInfo(); // jeton edge (s) ou assetVersion backend (ms)
+                  return bi ? ` <span class="lbl-sm">· build ${esc(bi.build)} · ${esc(bi.date)}</span>` : "";
+                })()}
               </p>
               <p class="lbl-sm" style="margin:0 0 .55rem;line-height:1.5">
                 ${t("acc_opensource")}

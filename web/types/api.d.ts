@@ -687,6 +687,83 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/call/ice": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Serveurs ICE pour l'appel P2P (STUN + identifiants TURN éphémères)
+         * @description Configuration à passer à RTCPeerConnection pour le prochain appel : STUN publics, plus — si un relais est configuré côté serveur (TURN_URLS + TURN_SECRET) — un relais TURN avec identifiants éphémères au format REST de coturn (username = timestamp d'expiration, credential = HMAC-SHA1). Même relayé, le média reste chiffré (DTLS-SRTP) : le relais ne voit que des paquets opaques. Authentifié — un endpoint public ferait du relais un proxy ouvert.
+         */
+        get: operations["getCallIceServers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/call/handled": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Prévient MES autres appareils qu'un appel a été décroché/refusé ici (coupe la sonnerie)
+         * @description Relais éphémère (aucun stockage) : pousse un blob chiffré self-key sur le bus SSE de mon identité, vers mes autres appareils. Réservé aux appareils approuvés.
+         */
+        post: operations["notifyCallHandled"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sync/relay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Relaie la synchronisation P2P inter-appareils (anti-entropie, DataChannel, handoff de clé)
+         * @description Relais éphémère (aucun stockage) : pousse un blob OPAQUE (chiffré côté navigateur — clé self, ou secret d'appairage éphémère pour `k:"link"`) sur le bus SSE de mon identité. Réservé aux appareils approuvés, sauf la poignée de main d'appairage `k:"link"` autorisée à un appareil en attente.
+         */
+        post: operations["syncRelay"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/magic-link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Envoie un lien de connexion à usage unique par e-mail */
+        post: operations["requestMagicLink"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agenda": {
         parameters: {
             query?: never;
@@ -1491,6 +1568,24 @@ export interface paths {
         put?: never;
         /** Quitte un groupe (l'owner doit transférer la propriété avant, sauf s'il est seul) */
         post: operations["leaveGroup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/groups/{id}/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Récupère les enveloppes de sender key qui m'attendent dans ce groupe */
+        get: operations["getGroupKeys"];
+        put?: never;
+        /** Dépose mes enveloppes de sender key à destination d'autres membres du groupe */
+        post: operations["putGroupKeys"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2843,7 +2938,15 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         Error: {
+            /** @description Message lisible, en français, destiné au repli. Ne PAS s'en servir pour décider d'un comportement : préférer `reason`, qui est stable et non traduit. */
             error?: string;
+            /**
+             * @description Motif machine du refus, stable et non traduit. Absent sur les erreurs qui n'en exposent pas (et sur les backends antérieurs à son introduction) : les clients doivent retomber sur `error` dans ce cas.
+             * @enum {string}
+             */
+            reason?: "unauthenticated" | "unknown_handle" | "self" | "awaiting_them" | "awaiting_me" | "not_contacts" | "messaging_off" | "calls_off" | "premium_chat" | "premium_call";
+            /** @description Handle concerné par le refus, sans « @ ». Présent avec les motifs du canal 1:1. */
+            handle?: string;
         };
         Ok: {
             /** @example true */
@@ -4886,6 +4989,168 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getCallIceServers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Serveurs ICE à utiliser (expiresAt null si aucun TURN configuré) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        iceServers: {
+                            urls: string[];
+                            username?: string;
+                            credential?: string;
+                        }[];
+                        /** Format: date-time */
+                        expiresAt?: string | null;
+                    };
+                };
+            };
+            /** @description Non authentifié */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    notifyCallHandled: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    iv: string;
+                    ciphertext: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Diffusé aux autres appareils */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        ok?: boolean;
+                    };
+                };
+            };
+            /** @description Payload invalide */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Appareil inconnu ou non approuvé */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    syncRelay: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Device-id cible (optionnel ; absent = diffusion à tous mes appareils) */
+                    to?: string;
+                    /** @description Type de trame ; `link` = poignée d'appairage (handoff de clé) */
+                    k?: string;
+                    iv: string;
+                    ciphertext: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Relayé aux autres appareils */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        ok?: boolean;
+                    };
+                };
+            };
+            /** @description Payload invalide */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Appareil inconnu ou non approuvé */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    requestMagicLink: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: email */
+                    email: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Lien envoyé si un compte correspond (réponse volontairement neutre) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        ok?: boolean;
+                    };
                 };
             };
         };
@@ -7629,6 +7894,123 @@ export interface operations {
             };
             /** @description Utilisateur non membre du groupe */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getGroupKeys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Enveloppes destinées à l'appelant (liste vide si aucune) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        envelopes?: {
+                            /** @description Handle de l'émetteur */
+                            from?: string;
+                            /** @description Clé publique d'identité de l'émetteur (JWK sérialisé) */
+                            fromPub?: string;
+                            iv?: string;
+                            ciphertext?: string;
+                        }[];
+                    };
+                };
+            };
+            /** @description Non authentifié */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Réservé aux membres du groupe */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    putGroupKeys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Au-delà de 100, le surplus est ignoré silencieusement. Une enveloppe mal formée, trop volumineuse (iv > 200, ciphertext > 20000) ou destinée à un non-membre est ignorée — d'où `stored` en réponse. */
+                    envelopes: {
+                        /** @description Handle du membre destinataire */
+                        to: string;
+                        /** @description Clé publique d'identité de l'émetteur (JWK sérialisé) */
+                        fromPub?: string;
+                        iv: string;
+                        ciphertext: string;
+                    }[];
+                };
+            };
+        };
+        responses: {
+            /** @description Enveloppes déposées */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {boolean} */
+                        ok?: true;
+                        /** @description Nombre d'enveloppes REELLEMENT stockées (les invalides sont ignorées) */
+                        stored?: number;
+                    };
+                };
+            };
+            /** @description `envelopes` manquant ou vide */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Non authentifié */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Réservé aux membres du groupe */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

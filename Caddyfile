@@ -1,0 +1,45 @@
+# Edge de production (RÉFÉRENCE) — mindlog · talk, UNE seule origine.
+#
+# Sert le client Web statique ET proxifie l'API vers le backend, sur le même
+# domaine → le client garde des appels `/api` relatifs, cookies same-site, pas de
+# CORS. Le dossier `web/` du client doit être monté sur `/srv/client/web` et le
+# backend joignable en `backend:8787` (nom de service compose).
+#
+# ⚠️ En prod str01, l'edge/TLS réel est aujourd'hui le nginx du front
+# (`mindlog.id.web`, cf. docker-compose.prod du backend) — ce fichier est la
+# config Caddy équivalente, à valider par `caddy validate` avant tout déploiement.
+{
+	admin off
+}
+
+talk.mindlog.today {
+	encode gzip
+	root * /srv/client/web
+
+	# --- API + protocole → backend (jamais servis par le client) ---
+	@backend path /api/* /mcp /mcp/* /oauth/* /.well-known/* /internal/* /admin /admin/*
+	handle @backend {
+		reverse_proxy backend:8787
+	}
+
+	# --- assets versionnés : /static/* → racine du client ---
+	handle_path /static/* {
+		file_server
+	}
+
+	# --- pages live autonomes (HTML dédié, hors shell SPA) ---
+	handle /me/broadcast {
+		rewrite * /live/broadcast.html
+		file_server
+	}
+	handle /live/* {
+		rewrite * /live/watch.html
+		file_server
+	}
+
+	# --- SPA : manifest, service worker, index + repli routeur ---
+	handle {
+		try_files {path} /index.html
+		file_server
+	}
+}

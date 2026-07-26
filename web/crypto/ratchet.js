@@ -295,7 +295,11 @@ export async function ratchetEnsurePrekeys(handle, accessKey) {
 export function rIkFp(jwk) { try { return _b64url(rRawPub(rPublicOf(jwk))); } catch { return ""; } }
 export function rParseJwk(s) { try { return JSON.parse(s); } catch { return null; } }
 export function rMyIdentity() {
-  // ikA = keypair d'identité (priv JWK local + pub déduite).
+  // ikA = keypair d'identité (priv JWK local + pub déduite). Null si la clé E2E
+  // n'est pas (encore) chargée sur cet appareil — ex. sync.announce() au boot
+  // avant déverrouillage/restauration : les appelants (mdSelfAesKey,
+  // rCacheAesKey…) testent déjà le null ; sans ce garde, rPublicOf(null) crashait.
+  if (!E2E.privJwk) return null;
   return { priv: E2E.privJwk, pub: rPublicOf(E2E.privJwk) };
 }
 export async function rLoadState(me, peer) { return rIdbGet(rStateKey(me, peer)); }
