@@ -1,16 +1,24 @@
 # mindlog · talk — clients
 
-Tous les clients de talk, un dossier par plateforme. Le socle **UI + logique est
-unique** — `web/`, une SPA en modules ES sans bundler — et les autres dossiers
-n'en sont que des **enveloppes** : ils ne dupliquent ni vue ni logique métier.
+Tous les clients de talk, un dossier par plateforme. `web/` — une SPA en modules
+ES sans bundler — porte l'UI et la logique ; `android/` et `ios/` n'en sont que
+des **enveloppes** Capacitor. Les deux dossiers `-native`, eux, font exception à
+cette règle : voir plus bas.
 
 ```
-web/            socle : SPA servie sur le Web ET embarquée par les shells
-android/        shell Capacitor  — à venir (cf. mindlog.talk/BACKLOG.md, T30)
-ios/            shell Capacitor  — à venir
-dev-server.mjs  serveur de dev : statique + proxy /api vers le backend
-Caddyfile       référence du service en prod (l'edge fait foi)
+web/             socle : SPA servie sur le Web ET embarquée par les shells
+android/         shell Capacitor autour de web/ — à venir (BACKLOG, T30)
+ios/             shell Capacitor autour de web/ — à venir
+android-native/  implémentation Kotlin à part entière — à venir
+ios-native/      implémentation Swift à part entière — à venir
+dev-server.mjs   serveur de dev : statique + proxy /api vers le backend
+Caddyfile        référence du service en prod (l'edge fait foi)
 ```
+
+Les deux dossiers `-native` ne sont pas des variantes des shells : ce sont de
+vraies implémentations, avec leurs vues et leurs appels API. Voir
+`docs/architecture/clients.md` du monorepo — et leurs README, qui disent ce que
+cette duplication coûte.
 
 Le desktop reste **Tauri** et vit hors de ce dépôt.
 

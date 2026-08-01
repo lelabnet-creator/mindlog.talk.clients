@@ -26,6 +26,43 @@
     return Uint8Array.from(raw, (c) => c.charCodeAt(0));
   };
 
+  /**
+   * Inscription du service worker, quelle que soit la page.
+   *
+   * `navigator.serviceWorker.ready` ne résout QUE si la page courante est
+   * contrôlée par un SW. Depuis que la portée est réduite à « /app » (la racine
+   * appartient à la vitrine), une session ouverte sur `/me`, `/@handle`, `/k/*`
+   * ou `/i/*` ne l'est plus : `ready` resterait en attente indéfiniment — sans
+   * erreur, sans rejet — et l'abonnement push ne se ferait jamais. On interroge
+   * donc l'inscription par sa PORTÉE, et on attend son activation à la main.
+   */
+  async function swRegistration() {
+    let reg = null;
+    try {
+      reg = await navigator.serviceWorker.getRegistration("/app");
+    } catch (_) { /* ignore */ }
+    if (!reg) {
+      // Premier chargement : l'inscription posée par index.html n'est pas encore
+      // visible via getRegistration(). On réutilise sa promesse.
+      try {
+        reg = await window.__SW_REG__;
+      } catch (_) { /* inscription en échec */ }
+    }
+    if (!reg) return null;
+    if (reg.active) return reg;
+    const worker = reg.installing || reg.waiting;
+    if (!worker) return null;
+    await new Promise((resolve) => {
+      worker.addEventListener("statechange", function onChange() {
+        if (worker.state === "activated" || worker.state === "redundant") {
+          worker.removeEventListener("statechange", onChange);
+          resolve();
+        }
+      });
+    });
+    return reg.active ? reg : null;
+  }
+
   async function subscribe(reg) {
     const r = await fetch("/api/push/vapid-public-key", {
       credentials: "include",
@@ -52,7 +89,8 @@
   async function trySilent() {
     if (!supported() || Notification.permission !== "granted") return;
     try {
-      await subscribe(await navigator.serviceWorker.ready);
+      const reg = await swRegistration();
+      if (reg) await subscribe(reg);
     } catch (e) {
       /* non critique */
     }
@@ -64,7 +102,8 @@
     const perm = await Notification.requestPermission();
     if (perm !== "granted") return false;
     try {
-      return await subscribe(await navigator.serviceWorker.ready);
+      const reg = await swRegistration();
+      return reg ? await subscribe(reg) : false;
     } catch (e) {
       return false;
     }

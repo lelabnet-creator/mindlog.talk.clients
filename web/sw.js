@@ -1,6 +1,18 @@
 /**
  * Service worker — coquille PWA (tâche B1).
  *
+ * PORTÉE : « /app », posée à l'inscription (cf. `index.html`). Le script est
+ * servi depuis `/sw.js` — ce qui l'autoriserait à contrôler toute l'origine —
+ * mais sur `talk.<apex>` la racine appartient à la VITRINE (Astro, image
+ * Docker distincte). Un SW de portée racine servait ses pages depuis ce cache
+ * et masquait tout déploiement de la vitrine. Le manifeste suit la même portée.
+ *
+ * Corollaire : les autres points d'entrée de l'app (`/me`, `/@handle`, `/k/*`,
+ * `/i/*`, `/status`) ne sont plus contrôlés — pas de coquille hors-ligne pour
+ * eux, et ouverts depuis l'app installée ils sortent de sa fenêtre. Les élargir
+ * demanderait soit d'ajouter des portées, soit de revenir à la racine en
+ * excluant explicitement les chemins de la vitrine.
+ *
  * Stratégie volontairement minimale et sûre pour une app E2E :
  *  - /api, /mcp, /oauth, le flux SSE et toute requête non-GET → réseau direct
  *    (jamais interceptés ni mis en cache : contenu chiffré, flux temps réel, mutations).
@@ -125,7 +137,9 @@ self.addEventListener("notificationclick", (event) => {
       for (const client of list) {
         if ("focus" in client) return client.focus();
       }
-      return self.clients.openWindow("/");
+      // « / » est la vitrine depuis la scission : un clic sur une notification
+      // doit ouvrir l'APP, pas la page marketing.
+      return self.clients.openWindow("/app");
     })
   );
 });

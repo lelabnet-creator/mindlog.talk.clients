@@ -75,9 +75,36 @@
     <script src="/static/app.js?v=__V__" type="module"></script>
     <script>
       // Coquille PWA : enregistre le service worker (offline shell + installable).
+      //
+      // PORTÉE « /app » et non « / ». Sur `talk.<apex>`, l'edge sert la VITRINE
+      // (Astro) sur `/`, `/fr/*` et `/en/*`, et l'app sur le reste. Un SW de
+      // portée racine interceptait donc aussi les pages de la vitrine et les
+      // servait depuis son cache : après un déploiement de la vitrine, tout
+      // visiteur ayant déjà ouvert l'app continuait de voir l'ancienne version.
+      // Le script reste servi depuis `/sw.js` — une inscription peut toujours
+      // RESTREINDRE sa portée sous le chemin du script, jamais l'élargir.
       if ("serviceWorker" in navigator) {
         window.addEventListener("load", function () {
-          navigator.serviceWorker.register("/sw.js").catch(function () { /* non critique */ });
+          // Les inscriptions déjà posées à la racine ne disparaissent pas toutes
+          // seules : sans ce nettoyage, l'ancienne continuerait de contrôler la
+          // vitrine chez tous les utilisateurs existants.
+          navigator.serviceWorker
+            .getRegistrations()
+            .then(function (regs) {
+              regs.forEach(function (r) {
+                try {
+                  if (new URL(r.scope).pathname === "/") r.unregister();
+                } catch (_) { /* portée illisible : on n'y touche pas */ }
+              });
+            })
+            .catch(function () { /* non critique */ });
+
+          // Promesse exposée : `push-client.js` en a besoin pour retrouver
+          // l'inscription depuis une page HORS portée (/me, /@handle, /k, /i),
+          // où `navigator.serviceWorker.ready` ne résout jamais.
+          window.__SW_REG__ = navigator.serviceWorker
+            .register("/sw.js", { scope: "/app" })
+            .catch(function () { /* non critique */ });
         });
       }
     </script>
