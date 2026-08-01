@@ -1,67 +1,75 @@
 # mindlog · talk — clients
 
-Tous les clients de talk, un dossier par plateforme. `web/` — une SPA en modules
-ES sans bundler — porte l'UI et la logique ; `android/` et `ios/` n'en sont que
-des **enveloppes** Capacitor. Les deux dossiers `-native`, eux, font exception à
-cette règle : voir plus bas.
+Les clients de [mindlog · talk](https://github.com/jacquesh82/mindlog.talk), une
+messagerie chiffrée de bout en bout. Un dossier par plateforme.
 
 ```
-web/             socle : SPA servie sur le Web ET embarquée par les shells
-android/         shell Capacitor autour de web/ — à venir (BACKLOG, T30)
-ios/             shell Capacitor autour de web/ — à venir
-android-native/  implémentation Kotlin à part entière — à venir
-ios-native/      implémentation Swift à part entière — à venir
+web/             SPA en modules ES, sans bundler — l'UI et la logique
+android/         coquille Capacitor autour de web/       (vide)
+ios/             coquille Capacitor autour de web/       (vide)
+android-native/  implémentation Kotlin / Compose         (vide)
+ios-native/      implémentation Swift / SwiftUI          (vide)
 dev-server.mjs   serveur de dev : statique + proxy /api vers le backend
-Caddyfile        référence du service en prod (l'edge fait foi)
+Caddyfile        référence de la configuration servie en production
 ```
 
-Les deux dossiers `-native` ne sont pas des variantes des shells : ce sont de
-vraies implémentations, avec leurs vues et leurs appels API. Voir
-`docs/architecture/clients.md` du monorepo — et leurs README, qui disent ce que
-cette duplication coûte.
+Seul `web/` contient du code aujourd'hui. Le client desktop est un projet Tauri
+distinct, hors de ce dépôt.
 
-Le desktop reste **Tauri** et vit hors de ce dépôt.
+## Deux familles de clients
 
-## web/ — le socle
+Les coquilles `android/` et `ios/` embarquent `web/` dans une WebView : elles ne
+contiennent que le projet natif généré, la configuration Capacitor, les plugins
+natifs (notifications, biométrie, partage) et la chaîne de signature. Aucune vue
+ni logique n'y est réécrite — une évolution du web s'y propage par une commande
+de synchronisation.
 
-Extrait de `mindlog.talk/public/` lors de la scission client/backend.
+Les dossiers `android-native/` et `ios-native/` sont prévus pour des
+implémentations complètes, écrites dans le langage de la plateforme. Elles
+redessinent les vues et réécrivent les appels réseau.
+
+## web/
 
 ```
 web/
-  index.html      coquille SPA ; récupère la config runtime via /api/config
-  app.js          noyau (routeur, auth, boot) — cf. crypto/, ui/, views/, editor/, plugins/
-  net.js          couche réseau (base URL configurable : window.__API_BASE__ / setApiBase)
-  types/api.d.ts  types générés depuis le contrat (npm run gen:types)
+  index.html      coquille de la SPA ; lit la configuration runtime via /api/config
+  app.js          noyau : routeur, authentification, amorçage
+  crypto/         X3DH, Double Ratchet, clés de groupe
+  ui/ views/      composants et écrans
+  editor/         éditeur de messages
+  plugins/        modules fonctionnels (chat, agenda, appels…)
+  net.js          couche réseau ; base URL configurable
+  types/api.d.ts  types générés depuis le contrat OpenAPI
 ```
 
-### Dev
+### Développement
 
-Le backend doit tourner à part (défaut `http://localhost:8787`) :
+Le backend tourne à part, par défaut sur `http://localhost:8787` :
 
 ```sh
 # terminal 1 — backend
 cd ../mindlog.talk && DATABASE_DRIVER=pglite npm run dev
 # terminal 2 — client
-npm run dev            # http://localhost:3000, proxifie /api → backend
+npm run dev            # http://localhost:3000, proxifie /api vers le backend
 ```
 
-`BACKEND_URL` et `PORT` sont surchargables. En prod, le service statique + le
-proxy sont assurés par l'**edge** (Caddy, une seule origine) — pas par ce
-serveur de dev.
+`BACKEND_URL` et `PORT` sont surchargeables. En production, les fichiers
+statiques et le proxy `/api` sont servis par un reverse proxy Caddy — une seule
+origine — et non par ce serveur de développement.
 
-### Contrat
+### Types
 
-Les types TS de `web/types/api.d.ts` sont générés depuis
-`../mindlog.talk/contract/openapi.yaml` (`npm run gen:types`). Ne pas les
-éditer à la main.
+`web/types/api.d.ts` est généré depuis `../mindlog.talk/contract/openapi.yaml` :
 
-## android/ et ios/ — shells de plateforme
+```sh
+npm run gen:types
+```
 
-Vides pour l'instant, voir leurs README respectifs. La règle qui les gouverne :
-**tout ce qui est visible ou métier appartient à `web/`**. Un shell ne contient
-que le projet natif, la config Capacitor, les plugins natifs (push, biométrie,
-partage) et la chaîne de build/signature.
+Ne pas l'éditer à la main. Le contrat OpenAPI fait foi pour tous les clients,
+y compris les implémentations natives.
 
-L'ancien client Android **natif Kotlin** de `mindlog.talk/android/` n'est pas
-leur ancêtre : il est remplacé, pas porté (T30 pour la coquille Capacitor, T36
-pour son archivage).
+### Vérification syntaxique
+
+```sh
+npm run check          # parse tous les modules ES de web/
+```

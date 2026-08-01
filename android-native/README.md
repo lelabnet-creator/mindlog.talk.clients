@@ -1,32 +1,29 @@
 # mindlog · talk — client Android natif (Kotlin)
 
-Vide pour l'instant. Ce dossier accueillera une **implémentation native
-complète** — pas une coquille. La distinction est le sens même du suffixe
-`-native` :
+Vide. Ce dossier est prévu pour une **implémentation native complète**, à
+distinguer de la coquille `android/` :
 
 | | `android/` | `android-native/` (ici) |
 |---|---|---|
-| Nature | emballage Capacitor de `../web` | implémentation à part entière |
-| Vues | celles du web | redessinées en Jetpack Compose |
-| Appels API | ceux du web | réécrits en Kotlin |
-| Évolution fonctionnelle | gratuite, via `npm run sync` | à refaire ici |
+| Nature | coquille Capacitor embarquant `../web` | implémentation à part entière |
+| Vues | celles du client web | écrites en Jetpack Compose |
+| Appels réseau | ceux du client web | écrits en Kotlin |
+| Évolution fonctionnelle | héritée du web par synchronisation | à implémenter ici |
 
-## Avant d'y écrire la première ligne
+## Ce que cela implique
 
-C'est de la **duplication assumée**, et elle se paie. Le projet a déjà
-l'expérience : le client Android natif de talk n'a jamais eu d'i18n alors que
-son web est traduit en 7 langues. Rien ne casse quand une implémentation prend
-du retard — elle rend juste un produit différent sous le même nom.
+Une implémentation native duplique les écrans et la couche réseau. Ce qu'elle
+apporte en retour : démarrage à froid plus rapide, défilement et animations
+natifs, widgets système, intégrations profondes avec la plateforme, empreinte
+mémoire réduite.
 
-Ce que le natif apporte en échange : démarrage à froid, fluidité des listes et
-des animations, widgets, intégrations système profondes, empreinte mémoire.
-Ouvrir ce dossier veut dire que ces gains valent le coût récurrent.
+La contrepartie est permanente : chaque évolution fonctionnelle doit être portée
+ici en plus du client web, et un écart entre les deux ne provoque aucune erreur
+— il produit simplement deux applications différentes sous le même nom.
 
-## Garde-fou
+## Contrat d'API
 
-Le **contrat d'API fait foi** (`../../mindlog.talk/contract/openapi.yaml`). Générer les types depuis ce contrat
-plutôt que les retaper est le seul point où la duplication n'est pas
-négociable : c'est ce qui empêche le client natif de dériver en silence du
-serveur.
+Le contrat OpenAPI du service fait foi : `mindlog.talk/contract/openapi.yaml`.
 
-Convention complète : `docs/architecture/clients.md` du monorepo.
+Les types doivent être **générés depuis ce contrat**, jamais retapés : c'est ce
+qui garantit qu'un client natif suit les évolutions du serveur.

@@ -1,13 +1,12 @@
 // Serveur de dev du client Web mindlog · talk — statique + proxy API.
 //
-// Reproduit, sans dépendance, la couche de service que le backend Hono assurait
-// jusqu'ici (avant la scission client/backend) :
+// Sert le client et proxifie l'API sur une seule origine, sans dépendance :
 //   - `/static/*`            → fichiers de `web/` (préfixe retiré)
 //   - `/api|/mcp|/oauth|…`   → proxifiés vers le backend (défaut localhost:8787)
 //   - manifest / sw / assets → servis depuis `web/`
 //   - toute autre navigation → `web/index.html` (routeur SPA côté client)
 //
-// En prod, ce rôle est tenu par l'edge (Caddy, une seule origine) — cf. T40.
+// En production, ce rôle est tenu par un reverse proxy Caddy.
 
 import http from "node:http";
 import { readFile, stat } from "node:fs/promises";
@@ -24,8 +23,8 @@ const proxied = (p) =>
   p.startsWith("/oauth/") || p.startsWith("/.well-known/") ||
   p.startsWith("/internal/") || p.startsWith("/admin");
 
-// Pages live autonomes (HTML dédié, hors shell SPA) — servies par le client
-// depuis la scission (le backend ne les sert plus). Renvoie le fichier ou null.
+// Pages live autonomes (HTML dédié, hors shell SPA), servies par le client et
+// non par le backend. Renvoie le fichier ou null.
 function livePage(path) {
   if (path === "/me/broadcast") return join(ROOT, "live", "broadcast.html");
   if (/^\/live\/[A-Za-z0-9-]+$/.test(path)) return join(ROOT, "live", "watch.html");
