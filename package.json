@@ -1,9 +1,9 @@
 {
-  "name": "mindlog-talk-client",
+  "name": "mindlog-talk-clients",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Client Web de mindlog · talk — socle UI+logique unique (SPA modules ES), enveloppé par les shells natifs (Capacitor) et desktop (Tauri).",
+  "description": "Clients de mindlog · talk — un socle UI+logique unique (web/, SPA modules ES) enveloppé par les shells de plateforme : android/ et ios/ (Capacitor), desktop (Tauri).",
   "scripts": {
     "dev": "node dev-server.mjs",
     "gen:types": "npx --yes openapi-typescript@7.13.0 ../mindlog.talk/contract/openapi.yaml -o web/types/api.d.ts",

@@ -6,7 +6,7 @@
 # backend joignable en `backend:8787` (nom de service compose).
 #
 # ⚠️ En prod str01, l'edge/TLS réel est aujourd'hui le nginx du front
-# (`mindlog.id.web`, cf. docker-compose.prod du backend) — ce fichier est la
+# (`mindlog.idp/front`, cf. docker-compose.prod du backend) — ce fichier est la
 # config Caddy équivalente, à valider par `caddy validate` avant tout déploiement.
 {
 	admin off
