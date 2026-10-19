@@ -1,8 +1,9 @@
 // editor/tabs/home.js — colonne « Accueil » : aperçu configurable de la page
 // publique (style linktr.ee) à gauche + colonne « back-office » à droite.
+// L'agenda (écran Calendrier, RDV, événements) est parti dans mindlog·calendar.
 // Builder de rendu pur (câblage dans wireEditor). cf. docs/web-app-split-proposal.md
 import { esc } from "../../ui/dom.js";
-import { icon, miloSvg } from "../../ui/icons.js";
+import { icon } from "../../ui/icons.js";
 import { t } from "../../i18n.js";
 
 export function renderHomeColumn(data, { photo }) {
@@ -14,69 +15,12 @@ export function renderHomeColumn(data, { photo }) {
   const hmDisplayName = hmGet("display_name");
   const hmTitle = [hmGet("title"), hmGet("company")].filter(Boolean).join(" · ");
   const hmLocation = hmGet("location");
-  const hmPending = (data.requests || []).filter(r => r.status === "pending").length;
-  const hmEvents = [...(data.events || [])].sort((a, b) => (a.starts_at || "").localeCompare(b.starts_at || "")).slice(0, 4);
   const hmNotifs = (data.notifications || []).slice(0, 4);
   const hmProfilePublic = data.settings?.profile_public !== false;
-  const hmAgendaPublic = data.settings?.public_availability !== false;
   const hmGalleryPublic = data.settings?.gallery_public !== false;
   // Couverture de l'aperçu façon téléphone : champ « cover » s'il existe un jour,
   // sinon l'image par défaut (caméléon).
   const coverUrl = hmGet("cover") || "/static/default-cover.webp";
-
-  function hmEventCard(e) {
-    const d = new Date(e.starts_at);
-    const day = isNaN(d) ? "?" : d.getDate();
-    const mon = isNaN(d) ? "" : d.toLocaleString("fr-FR", { month: "short" });
-    const time = isNaN(d) ? "" : d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
-    return `<div class="hm-event">
-      <div class="hm-event-date"><div class="hm-event-day">${day}</div><div class="hm-event-mon">${mon}</div></div>
-      <div class="hm-event-info">
-        <div class="hm-event-title">${esc(e.title)}</div>
-        <div class="hm-event-meta">${time}${e.location ? ` · ${esc(e.location)}` : ""}</div>
-      </div>
-    </div>`;
-  }
-
-  // Mini-calendrier autonome (mois courant) pour l'écran « Calendrier » de l'aperçu
-  // téléphone : grille lundi→dimanche, pastille sur les jours à événement, puis les
-  // 2 prochains événements. Aucune dépendance au plugin calendrier (évite tout
-  // conflit de câblage avec l'onglet Agenda).
-  function miniCalHtml(events) {
-    const now = new Date();
-    const y = now.getFullYear(), m = now.getMonth(), today = now.getDate();
-    const monthName = now.toLocaleDateString("fr-FR", { month: "long", year: "numeric" });
-    const startOffset = (new Date(y, m, 1).getDay() + 6) % 7; // lundi = 0
-    const daysInMonth = new Date(y, m + 1, 0).getDate();
-    const evtDays = new Set(
-      (events || [])
-        .map(e => new Date(e.starts_at))
-        .filter(d => !isNaN(d) && d.getFullYear() === y && d.getMonth() === m)
-        .map(d => d.getDate())
-    );
-    let cells = "";
-    for (let i = 0; i < startOffset; i++) cells += `<span class="lt-cal-cell is-empty"></span>`;
-    for (let d = 1; d <= daysInMonth; d++) {
-      const cls = [d === today ? "is-today" : "", evtDays.has(d) ? "has-evt" : ""].filter(Boolean).join(" ");
-      cells += `<span class="lt-cal-cell ${cls}">${d}${evtDays.has(d) ? `<span class="lt-cal-dot"></span>` : ""}</span>`;
-    }
-    const floor = new Date(y, m, today);
-    const next = [...(events || [])]
-      .filter(e => { const d = new Date(e.starts_at); return !isNaN(d) && d >= floor; })
-      .sort((a, b) => (a.starts_at || "").localeCompare(b.starts_at || ""))
-      .slice(0, 2);
-    const nextHtml = next.length
-      ? `<div class="lt-cal-next">${next.map(hmEventCard).join("")}</div>`
-      : `<p class="lt-empty">${t("home_cal_no_events")}</p>`;
-    return `<div class="lt-cal">
-      <div class="lt-cal-month">${esc(monthName)}</div>
-      <div class="lt-cal-grid">
-        ${t("home_dow").split(",").map(x => `<span class="lt-cal-dow">${x}</span>`).join("")}
-        ${cells}
-      </div>
-      ${nextHtml}
-    </div>`;
-  }
 
   function hmActivityRow(n) {
     const t = n.type || "";
@@ -107,12 +51,6 @@ export function renderHomeColumn(data, { photo }) {
 
   return `<div class="hm-dashboard">
 
-      ${hmPending ? `<div class="hm-requests-banner" data-goto="Agenda">
-        ${icon("clock", 18)}
-        <div><b>${(hmPending > 1 ? t("home_pending_requests_plural") : t("home_pending_requests_one")).replace("{n}", hmPending)}</b> <span>${t("home_pending_awaiting")}</span></div>
-        <span style="margin-left:auto;color:var(--accent-ink);font-size:.8rem">${t("home_see_arrow")}</span>
-      </div>` : ""}
-
       <div class="hm-row hm-row-hybrid">
 
         <!-- ===== GAUCHE : aperçu de la page publique (linktr.ee) ===== -->
@@ -140,14 +78,7 @@ export function renderHomeColumn(data, { photo }) {
                   </div>
                 </section>
 
-                <!-- Écran 2 : Calendrier — mini-mois autonome (issu des événements) -->
-                <section class="lt-screen lt-screen--pad" data-screen="cal" aria-label="${t("home_screen_cal")}">
-                  <div class="lt-screen-h">${icon("calendar", 18)} ${t("home_agenda")}</div>
-                  ${miniCalHtml(data.events)}
-                  ${hmAgendaPublic ? `<button type="button" class="btn primary lt-book" id="lt-book">${icon("calendar", 16)} ${t("home_book_appt")}</button>` : ""}
-                </section>
-
-                <!-- Écran 3 : Galerie — montée via le plugin (repli si vide), cf. wireEditor -->
+                <!-- Écran 2 : Galerie — montée via le plugin (repli si vide), cf. wireEditor -->
                 <section class="lt-screen lt-screen--pad" data-screen="gallery" aria-label="${t("home_gallery")}">
                   <div class="lt-screen-h">${icon("image", 18)} ${t("home_gallery")}</div>
                   <div id="lt-gallery-slot" class="lt-gallery-slot"></div>
@@ -157,8 +88,7 @@ export function renderHomeColumn(data, { photo }) {
               <!-- Indicateur de pagination — colonne verticale sur le bord droit de l'écran -->
               <div class="lt-dots" id="lt-dots" role="tablist" aria-label="${t("home_preview_screens")}">
                 <button type="button" class="lt-dot is-on" data-go="0" aria-label="${t("home_screen_home")}"></button>
-                <button type="button" class="lt-dot" data-go="1" aria-label="${t("home_screen_cal")}"></button>
-                <button type="button" class="lt-dot" data-go="2" aria-label="${t("home_gallery")}"></button>
+                <button type="button" class="lt-dot" data-go="1" aria-label="${t("home_gallery")}"></button>
               </div>
             </div>
           </div>
@@ -171,12 +101,6 @@ export function renderHomeColumn(data, { photo }) {
                 <span class="hm-toggle-ic">${icon("user", 14)}</span>
                 <span class="hm-toggle-label">${t("home_profile_public")}</span>
                 <input type="checkbox" data-setting="profile_public" ${hmProfilePublic ? "checked" : ""}>
-                <span class="hm-toggle-sw"></span>
-              </label>
-              <label class="hm-toggle">
-                <span class="hm-toggle-ic">${icon("calendar", 14)}</span>
-                <span class="hm-toggle-label">${t("home_agenda_public")}</span>
-                <input type="checkbox" data-setting="public_availability" ${hmAgendaPublic ? "checked" : ""}>
                 <span class="hm-toggle-sw"></span>
               </label>
               <label class="hm-toggle">
@@ -256,15 +180,6 @@ export function renderHomeColumn(data, { photo }) {
             <div class="hm-stats-grid">
               <div class="hm-stat" data-goto="Relations"><b>${_deg1.length}</b><span>${t("home_connections")}</span></div>
               <div class="hm-stat" data-goto="Notifications"><b>${data.unread || 0}</b><span>${t("home_unread")}</span></div>
-              <div class="hm-stat" data-goto="Agenda"><b>${hmPending}</b><span>${t("home_pending_rdv")}</span></div>
-              <div class="hm-stat" data-goto="Agenda"><b>${data.events?.length || 0}</b><span>${t("home_events")}</span></div>
-            </div>
-          </div>
-
-          <div class="hm-section">
-            <div class="hm-section-title">${t("home_upcoming_events")} <a data-goto="Agenda" href="#">${t("home_see_all")}</a></div>
-            <div class="hm-events">
-              ${hmEvents.length ? hmEvents.map(hmEventCard).join("") : `<div class="hm-empty">${miloSvg(44)}<br>${t("home_no_events")}</div>`}
             </div>
           </div>
 

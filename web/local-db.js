@@ -1,8 +1,8 @@
 /**
  * Cache PIM hors-ligne (tâche B2) — SQLite-WASM sur OPFS (VFS SAHPool).
  *
- * Stocke UNIQUEMENT les données PIM (carte, agenda, relations, demandes, tags,
- * notifications, préférences) — JAMAIS la clé d'accès ni le contenu/métadonnées
+ * Stocke UNIQUEMENT les données PIM (carte, relations, demandes de relation,
+ * tags, notifications, préférences) — JAMAIS la clé d'accès ni le contenu/métadonnées
  * des messages E2E (éphémères + ratchet destructif). Miroir léger du cache Room
  * d'Android, côté web.
  *
@@ -38,15 +38,14 @@
 
   // Liste blanche des champs PIM conservés hors-ligne. Exclut volontairement
   // `accessKey` (secret) et `conversations` (métadonnées de messages E2E).
+  // L'agenda (événements, demandes de RDV, exceptions de dispo) est parti dans
+  // mindlog·calendar : plus rien à en garder ici.
   const KEEP = [
     "handle",
     "fields",
-    "events",
     "relations",
     "incoming",
-    "requests",
     "tags",
-    "overrides",
     "notifications",
     "settings",
     "hasPhoto",
@@ -54,7 +53,6 @@
     "hasPubkey",
     "pubkey",
     "unread",
-    "pending",
     "recoveryEmail",
     "publicUrl",
   ];

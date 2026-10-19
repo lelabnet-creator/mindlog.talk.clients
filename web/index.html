@@ -39,6 +39,7 @@
       window.__APP_V__ = "__V__";
       window.__APP_VERSION__ = "%%APP_VERSION%%";
       window.__TURNSTILE_SITE_KEY__ = "%%TURNSTILE_SITE_KEY%%";
+      window.__CALENDAR_URL__ = "%%CALENDAR_URL%%";
     </script>
     <!-- Import map : les modules internes importent « ../app.js » SANS ?v= ;
          sans cette redirection, cette URL nue serait un module DIFFÉRENT de
@@ -59,6 +60,8 @@
           const cfg = await fetch("/api/config").then((r) => r.json());
           window.__APP_VERSION__ = cfg.appVersion;
           window.__TURNSTILE_SITE_KEY__ = cfg.turnstileSiteKey;
+          // Base de mindlog·calendar (liens « Agenda ») ; "" si non configurée.
+          window.__CALENDAR_URL__ = cfg.calendarUrl || "";
           // ⚠ Jeton d'assets : NE PAS écraser un `__V__` déjà substitué (edge).
           // L'edge ne templatise QUE `__V__` : avant ce garde, la condition `%%`
           // (vraie en prod scindée) remplaçait le jeton edge (secondes) par

@@ -1,8 +1,9 @@
 // editor/tabs/options.js — Préférences de comportement de l'application :
-// confidentialité, messagerie & appels, agenda & RDV.
+// confidentialité, messagerie & appels. L'agenda (dispos, événements, RDV) est
+// parti dans mindlog·calendar : il n'en reste qu'un lien vers sa gestion.
 // L'administration du compte (abonnement, sécurité, accès, données) se trouve
 // dans l'onglet « Mon compte » (account.js).
-import { DEFAULT_SETTINGS, DOW_LETTERS, DOW_NAMES, isDev, normalizeAvailability } from "../../core.js";
+import { DEFAULT_SETTINGS, calendarUrl, isDev } from "../../core.js";
 import { swatchesHtml } from "../../theme.js";
 import { esc } from "../../ui/dom.js";
 import { icon } from "../../ui/icons.js";
@@ -10,6 +11,8 @@ import { t } from "../../i18n.js";
 
 export function renderOptionsColumn(data) {
   const s = { ...DEFAULT_SETTINGS, ...(data.settings || {}) };
+  // Base de mindlog·calendar ("" si non configurée → pas de carte Agenda).
+  const calUrl = calendarUrl();
   const mkToggle = (key, name, desc, checked) =>
     `<label class="opt-row">
       <span class="opt-text"><span class="opt-name">${esc(name)}</span><span class="opt-desc">${esc(desc)}</span></span>
@@ -33,7 +36,6 @@ export function renderOptionsColumn(data) {
         <div class="opt-v2-head">${icon("shield", 16)} ${t("opts_privacy_head")}</div>
         <div class="opt-list">
           ${mkToggle("profile_public",      t("opts_profile_public_name"), t("opts_profile_public_desc"), data.settings?.profile_public !== false)}
-          ${mkToggle("public_availability", t("opts_agenda_public_name"),  t("opts_agenda_public_desc"),  data.settings?.public_availability !== false)}
           ${mkToggle("gallery_public",      t("opts_gallery_public_name"), t("opts_gallery_public_desc"), data.settings?.gallery_public !== false)}
         </div>
         <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.8rem">
@@ -50,16 +52,12 @@ export function renderOptionsColumn(data) {
         </div>
       </div>
 
+      ${calUrl ? `
       <div class="opt-v2-block">
-        <div class="opt-v2-head">${icon("calendar", 16)} ${t("opts_calendar_head")}</div>
-        <div class="opt-list">
-          ${mkToggle("allow_requests", t("opts_requests_name"), t("opts_requests_desc"), s.allow_requests)}
-        </div>
-        <p class="lbl-sm" style="margin:.8rem 0 .3rem">${t("opts_default_days")}</p>
-        <div class="avail-days" id="avail-days" role="group">
-          ${DOW_LETTERS.map((d, i) => `<button type="button" class="avail-day ${normalizeAvailability(s.availability).weekdays[i] ? "on" : ""}" data-dow="${i}" aria-pressed="${normalizeAvailability(s.availability).weekdays[i]}" title="${DOW_NAMES[i]}">${d}</button>`).join("")}
-        </div>
-      </div>
+        <div class="opt-v2-head">${icon("calendar", 16)} ${t("opts_calendar_moved_t")}</div>
+        <p class="lbl-sm" style="margin:.4rem 0 .8rem;line-height:1.45">${t("opts_calendar_moved_d")}</p>
+        <a class="btn sm" href="${esc(calUrl)}/me">${icon("calendar", 14)} ${t("opts_calendar_open")}</a>
+      </div>` : ""}
 
       ${isDev ? `
       <div class="opt-v2-block opt-v2-block--full opt-v2-dev">

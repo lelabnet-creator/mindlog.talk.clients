@@ -47,7 +47,6 @@ export function renderAccountColumn(data, { photo, profileHtml = "", notifsHtml 
   };
 
   // ── Dashboard (ex-Accueil) ────────────────────────────────────────────────
-  const hmPending      = (data.requests || []).filter(r => r.status === "pending").length;
   const hmNotifs       = (data.notifications || []).slice(0, 4);
   const rel  = data.relations || { 1: [], 2: [], 3: [] };
   const deg1 = rel[1] || [];
@@ -119,11 +118,8 @@ export function renderAccountColumn(data, { photo, profileHtml = "", notifsHtml 
             // (sinon gros espace mort en haut du panneau Compte).
             (() => {
               const banners = [
-                hmPending ? `<div class="hm-requests-banner" data-goto="Agenda">
-                  ${icon("clock", 18)}
-                  <div><b>${(hmPending > 1 ? t("acnt_rdv_pending_n") : t("acnt_rdv_pending_1")).replace("{n}", hmPending)}</b> <span>${t("acnt_rdv_wait")}</span></div>
-                  <span style="margin-left:auto;color:var(--accent-ink);font-size:.8rem">${t("acnt_see_arrow")}</span>
-                </div>` : "",
+                // (Bandeau « RDV en attente » retiré : les demandes de RDV vivent
+                // désormais dans mindlog·calendar.)
                 // Le statut « Premium actif » est désormais porté par la couronne
                 // sur l'avatar (header) — plus de bandeau permanent qui mange la
                 // place. On ne conserve QUE l'alerte critique « paiement en attente »

@@ -18,7 +18,7 @@ import { openE2eBackup, openE2eRestore, openKeyRecovery, openSafetyNumber } from
 import { addDeckColumn, deckState, removeDeckColumn } from "./editor/deck.js";
 import { siteHeader } from "./ui/icons.js";
 import { renderStatus } from "./views/status.js";
-import { DEFAULT_AVAILABILITY, DEFAULT_SETTINGS, DOW_LETTERS, DOW_NAMES, SESSION_HINT, TOUR_SEEN_KEY, app, isLoggedIn, lastHandle, loadAuth, myHandle, myKey, normalizeAvailability, pick, relDate, setLastHandle, setMeProfile, setSessionHint, setStoredHandle, setStoredKey, storedHandle, storedKey, viewerHeaders } from "./core.js";
+import { SESSION_HINT, TOUR_SEEN_KEY, app, calendarUrl, isLoggedIn, lastHandle, loadAuth, myHandle, myKey, pick, relDate, setLastHandle, setMeProfile, setSessionHint, setStoredHandle, setStoredKey, storedHandle, storedKey, viewerHeaders } from "./core.js";
 import { openContactColumn, renderPremiumFull, renderPrivate } from "./editor/index.js";
 import { logActivity, logFailure } from "./activity-log.js";
 function setLang(code) { setLangCode(code); route(); }
@@ -453,9 +453,9 @@ function fmtRange(start, end) {
 }
 
 /* ------------------------------- Calendrier ------------------------------ */
-// Le calendrier et la demande de RDV sont fournis par le plugin
-// `public/plugins/calendar.js` (registre de plugins) et exposés via
-// `host.calendar = { html, wire, openBooking, fmtDay, defaultStatus }`.
+// L'agenda (dispos, événements, demandes de RDV) n'est plus ici : il vit dans
+// mindlog·calendar, à sa propre origine (`calendarUrl()` de core.js). Le profil
+// public n'en garde qu'un lien vers `${calendarUrl}/@handle`.
 
 function valueHtml(key, value) {
   if (!value) return '<span class="v" style="color:var(--muted)">—</span>';
@@ -3579,29 +3579,15 @@ async function renderPublicProfile(handle) {
     ? `<a class="btn sm primary" href="/@${esc(data.handle)}/space" title="${t("ppf_sub_unlock_title")}">${icon("lock", 15)} ${t("ppf_subs_only")}</a>`
     : "";
   // ── Bouton « Live » sous Discuter/Appel ──────────────────────────────────
-  // S'affiche quand le créateur a activé le bénéfice « lives » de son espace
-  // ET qu'un live à venir (kind='live') est planifié dans son agenda. Le badge
-  // remonte le nombre de lives planifiés. Cible :
-  //   - propriétaire : /me/broadcast (démarrage / planification)
-  //   - abonné       : /@handle/space (hub des lives — gate déjà débloquée)
-  //   - visiteur     : /@handle/space (CTA d'abonnement)
+  // S'affiche pour le propriétaire quand il a activé le bénéfice « lives » de
+  // son espace → /me/broadcast (démarrage / planification). Le badge et le
+  // bouton côté visiteur reposaient sur les lives planifiés dans l'agenda
+  // (data.events, kind='live') : l'agenda est parti dans mindlog·calendar et
+  // le profil ne les reçoit plus. Le visiteur rejoint les lives par l'espace
+  // (/@handle/space, bouton dédié ci-dessous).
   const _livesEnabled = _spaceGated && !!_benefits.lives;
-  const _nowTs = Date.now();
-  const _upcomingLives = _livesEnabled
-    ? (data.events || []).filter((e) => e.kind === "live" && (() => {
-        const t = new Date(e.starts_at).getTime();
-        return Number.isFinite(t) && t >= _nowTs;
-      })())
-    : [];
-  const _liveCount = _upcomingLives.length;
-  const _showLiveBtn = _livesEnabled && (isSelf || _liveCount > 0);
-  const _liveBadge = _liveCount > 0
-    ? `<span class="btn-badge" aria-label="${(_liveCount > 1 ? t("ppf_live_aria_pl") : t("ppf_live_aria")).replace("{n}", _liveCount)}">${_liveCount}</span>`
-    : "";
-  const _liveBtnHtml = _showLiveBtn
-    ? (isSelf
-        ? `<a class="btn sm" href="/me/broadcast" target="_blank" rel="noopener" title="${t("ppf_live_start_title")}">${icon("users", 15)} ${t("ppf_live")}${_liveBadge}</a>`
-        : `<a class="btn sm" href="/@${esc(data.handle)}/space" title="${_hasSpaceAccess ? t("ppf_live_access_title") : t("ppf_live_sub_title")}">${icon("users", 15)} ${t("ppf_live")}${_liveBadge}</a>`)
+  const _liveBtnHtml = _livesEnabled && isSelf
+    ? `<a class="btn sm" href="/me/broadcast" target="_blank" rel="noopener" title="${t("ppf_live_start_title")}">${icon("users", 15)} ${t("ppf_live")}</a>`
     : "";
   const _contactActions =
     _canChat || _canCall || _premiumGateCta || _liveBtnHtml
@@ -3638,12 +3624,19 @@ async function renderPublicProfile(handle) {
          <span>${t("com_back")}</span>
        </button>`
     : "";
+  // Lien « Agenda » → agenda public de la personne sur mindlog·calendar
+  // (dispos, événements publics, demandes de RDV), même onglet. Masqué si
+  // l'URL de mindlog·calendar n'est pas configurée.
+  const _calUrl = calendarUrl();
+  const _agendaBtnHtml = _calUrl
+    ? `<a class="btn sm" href="${esc(_calUrl)}/@${encodeURIComponent(data.handle)}" title="${esc(t("cv_calendar_link_title").replace("{handle}", data.handle))}">${icon("calendar", 15)} ${t("nav_agenda")}</a>`
+    : "";
   const _profileActions = {
     isSelf,
     topLeft: "",
     left: "",
     right: relBtnHtml(), // Bouton relation dans la zone cover-actions (bas du hero)
-    contact: _contactActions + _spaceBtnHtml,
+    contact: _contactActions + _spaceBtnHtml + _agendaBtnHtml,
   };
   // CTA « Créer ma page » : visible pour les visiteurs anonymes. Icône + label
   // sur desktop, icône seule (cercle compact) sur mobile — même esprit que
@@ -3690,6 +3683,16 @@ async function renderPublicProfile(handle) {
     }
   });
 
+  // Retire l'onglet ET la pastille Galerie (galerie vide / indisponible). En
+  // grand écran la Galerie est l'onglet par défaut (l'Agenda est parti dans
+  // mindlog·calendar) : on rebascule alors sur le suivant (Espace) s'il existe.
+  const dropGalleryTab = () => {
+    app.querySelectorAll('[data-tab="gallery"]').forEach((el) => el.remove());
+    const panel = app.querySelector("#pub-gallery-slot");
+    if (panel && !panel.hidden && !window.matchMedia("(max-width: 767px)").matches) {
+      window._pubTabGo?.("about");
+    }
+  };
   // Galerie : montée dans l'onglet Galerie ET en inline bas du panel À propos.
   const galleryP = host.gallery?.mountPublic(app.querySelector("#pub-gallery-slot"), data.handle);
   Promise.resolve(galleryP)
@@ -3707,10 +3710,10 @@ async function renderPublicProfile(handle) {
           if (prev?.classList.contains("pub-section-h")) prev.remove();
           _inlineGal.remove();
         }
-        if (!isSelf) app.querySelector('[data-tab="gallery"]')?.remove();
+        if (!isSelf) dropGalleryTab();
       }
     })
-    .catch(() => { app.querySelector('[data-tab="gallery"]')?.remove(); })
+    .catch(() => { dropGalleryTab(); })
     .finally(() => {
       // Masque la barre d'onglets si ≤1 onglet visible (inutile avec un seul choix)
       const tabBar = app.querySelector("#pub-tabs");
@@ -4062,13 +4065,6 @@ async function renderPublicProfile(handle) {
     setTimeout(renderGallery, 100);
   }
 
-  // editable = isSelf : sur sa propre page publique on peut éditer la dispo
-  // (toggle libre/occupé en cliquant un jour) ; sur la page d'un tiers c'est en
-  // lecture seule. canBook = !isSelf : on ne se prend pas un RDV à soi-même.
-  host.calendar.wire(app.querySelector(".calendar"), data.overrides || {}, isSelf, data.handle, undefined, !isSelf, data.events || []);
-  // (bouton « Demander un RDV » retiré : seul le clic sur un jour libre
-  // déclenche la modale, comme indiqué par .cal-hint.)
-
   // Bio inline éditable (isSelf uniquement)
   const bioEdit = app.querySelector("#pub-bio-edit");
   if (bioEdit) {
@@ -4212,9 +4208,6 @@ function setupProfileSwipe(page) {
   }
 }
 
-/* ------------------------- Demande de RDV (modal) ------------------------ */
-// La modale de RDV est fournie par le plugin calendrier (`host.calendar.openBooking`).
-
 // Composant RÉUTILISABLE : la carte « profil » de la page individuelle.
 // Utilisée par cardViewHtml (page /@handle, colonne 0) ET par la colonne
 // fermable « fiche contact » (openContactColumn) → rendu strictement identique.
@@ -4276,30 +4269,10 @@ function profileCardHtml(data, profileActions = {}) {
 }
 
 function cardViewHtml(data, editable, profileActions = "") {
-  host.calendar.setAvailability(data.availability);
   const isSelf = !!(data.viewer && data.viewer.handle === data.handle);
   // Onglet « Espace privé » : toujours pour le propriétaire (même vide) ; pour un
   // visiteur, seulement si l'espace est vendable (tarif fixé + page publiée).
   const showSpaceTab = isSelf || !!(data.space && data.space.price_cents && (data.space.pages || []).length);
-  const canBook = !isSelf;
-  const hasEvents = data.events && data.events.length > 0;
-  const hasAvailability = !!data.availability;
-  const showAgenda = hasEvents || hasAvailability;
-  const nowTs = Date.now();
-  // Prochains événements (futurs uniquement) — filtrés côté client pour n'afficher
-  // que ceux à venir, même si le serveur a renvoyé des événements passés.
-  const upcomingEvents = (data.events || [])
-    .filter(e => e.starts_at && new Date(e.starts_at).getTime() >= nowTs)
-    .sort((a, b) => (a.starts_at || "").localeCompare(b.starts_at || ""));
-  const upcomingGroups = (() => {
-    const groups = []; let cur = null;
-    for (const e of upcomingEvents) {
-      const key = (e.starts_at || "").slice(0, 10);
-      if (!cur || cur.key !== key) { cur = { key, label: fmtDayLabel(e.starts_at), items: [] }; groups.push(cur); }
-      cur.items.push(e);
-    }
-    return groups;
-  })();
 
   const get = (k) => data.fields?.find((f) => f.key === k)?.value || "";
   const name = get("display_name") || data.handle;
@@ -4433,10 +4406,9 @@ function cardViewHtml(data, editable, profileActions = "") {
             ${profileActions?.contact || ""}
           </div>
         </div>
-        <!-- Pastilles overlay en bas du héro (mobile uniquement) — 3 slides : home / agenda / gallery -->
+        <!-- Pastilles overlay en bas du héro (mobile uniquement) — slides : home / gallery (/ space) -->
         <div class="pub-hero-dots" id="pub-hero-dots" role="group" aria-label="${t("cv_hero_dots_aria")}">
           <button type="button" class="pub-hero-dot is-on" data-tab="home" aria-label="${t("cv_home")}"></button>
-          <button type="button" class="pub-hero-dot" data-tab="agenda" aria-label="${t("cv_calendar")}"></button>
           <button type="button" class="pub-hero-dot" data-tab="gallery" aria-label="${t("cv_gallery")}"></button>
           ${showSpaceTab ? `<button type="button" class="pub-hero-dot" data-tab="space" aria-label="${t("spx_eyebrow")}"></button>` : ""}
         </div>
@@ -4475,10 +4447,6 @@ function cardViewHtml(data, editable, profileActions = "") {
             role="tab" aria-selected="true" aria-controls="pub-about">
             ${icon("user", 16)}<span>${t("cv_home")}</span>
           </button>
-          <button type="button" class="pub-tab" data-tab="agenda"
-            role="tab" aria-selected="false" aria-controls="pub-agenda">
-            ${icon("calendar", 16)}<span>${t("cv_calendar")}</span>
-          </button>
           <button type="button" class="pub-tab" data-tab="gallery"
             role="tab" aria-selected="false" aria-controls="pub-gallery-slot">
             ${icon("image", 16)}<span>${t("cv_gallery")}</span>
@@ -4512,24 +4480,6 @@ function cardViewHtml(data, editable, profileActions = "") {
               `<li class="field"><span class="k">${esc(f.label || f.key)}</span>${valueHtml(f.key, f.value)}</li>`
             ).join("")}</ul>` : ""}
             ${rel1.length ? `<div class="pub-section-h first">${icon("users", 14)} ${t("cv_relations")}</div><ul class="rels">${relationsListHtml(rel1, false)}</ul>` : ""}
-          </section>
-
-          <section id="pub-agenda" class="pub-tab-panel" role="tabpanel" tabindex="-1" hidden>
-            ${hasAvailability ? `<div class="pub-section-h first">${icon("clock", 16)} ${t("cv_availability")}</div>
-              <div class="calendar-fill">
-                ${host.calendar.html(data.overrides, isSelf, undefined, canBook, data.events || [])}
-              </div>
-              ${isSelf || data.options?.allowRequests === false ? "" :
-                `<p class="cal-hint" role="note">${icon("calendar", 14)} <span>${t("cv_book_hint")}</span></p>`}` : ""}
-            ${upcomingGroups.length ? `
-              <div class="pub-section-h${!hasAvailability ? " first" : ""}">${icon("calendar", 16)} ${t("cv_upcoming")}</div>
-              <div class="ev-agenda">
-                ${upcomingGroups.map(g => `<section class="ev-group">
-                  <div class="ev-day">${esc(g.label)}</div>
-                  ${g.items.map(e => eventCardHtml(e, false, nowTs)).join("")}
-                </section>`).join("")}
-              </div>` : ""}
-            ${!hasAvailability && !upcomingGroups.length ? `<p class="pub-empty">${t("cv_no_events")}</p>` : ""}
           </section>
 
           <section id="pub-gallery-slot" class="pub-tab-panel" role="tabpanel" tabindex="-1" hidden></section>
@@ -4653,7 +4603,7 @@ function openGalLightbox(root, items, startIdx) {
 }
 
 // Flèches stylisées ">" qui indiquent qu'une slide voisine existe (mobile
-// carrousel : home / agenda / gallery — gallery peut être absente). Synchro
+// carrousel : home / gallery / space — gallery et space peuvent être absentes). Synchro
 // à chaque changement de slide actif via syncDot/syncDots. Au clic, navigue
 // vers la slide précédente/suivante en réutilisant _pubTabGo.
 function pubSlideArrows(activeKey) {
@@ -4705,7 +4655,13 @@ function wirePubTabs() {
   const tabs = [...document.querySelectorAll("#pub-tabs .pub-tab")];
   const allPanels = [...document.querySelectorAll(".pub-tab-panel")];
   if (!tabs.length) return;
-  const tabIds = { about: "pub-about", agenda: "pub-agenda", gallery: "pub-gallery-slot", space: "pub-space" };
+  const tabIds = { about: "pub-about", gallery: "pub-gallery-slot", space: "pub-space" };
+  // Onglet par défaut en grand écran : le premier onglet encore présent hors
+  // « Accueil » (masqué en ≥ 768px, son contenu migre côté cover) — Galerie,
+  // sinon Espace. Lu dans le DOM à l'appel : l'onglet Galerie d'un visiteur
+  // peut être retiré après coup (galerie vide).
+  const defaultTab = () =>
+    [...document.querySelectorAll("#pub-tabs .pub-tab")].map((t) => t.dataset.tab).find((k) => k !== "about") || "about";
 
   function syncDots(key) {
     document.querySelectorAll(".pub-hero-dot").forEach((d) =>
@@ -4732,30 +4688,30 @@ function wirePubTabs() {
       // Large screen : show/hide — pub-about exclu (toujours visible via CSS sur mobile)
       const switchable = allPanels.filter((p) => p.id !== "pub-about");
       switchable.forEach((p) => { p.hidden = true; p.classList.remove("is-on"); p.tabIndex = -1; });
-      const panelId = tabKey === "about" ? "pub-agenda" : (tabIds[tabKey] || "pub-agenda");
-      const panel = document.getElementById(panelId);
+      const key = tabKey === "about" || !tabIds[tabKey] ? defaultTab() : tabKey;
+      const panel = document.getElementById(tabIds[key]);
       if (panel) { panel.hidden = false; panel.classList.add("is-on"); panel.tabIndex = 0; }
-      syncDots(tabKey);
+      syncDots(key);
     }
   };
   tabs.forEach((t) => t.addEventListener("click", () => window._pubTabGo(t.dataset.tab)));
   // Pastilles hero (mobile) : cliquables pour naviguer
   document.querySelectorAll(".pub-hero-dot[data-tab]").forEach((d) =>
     d.addEventListener("click", () => window._pubTabGo(d.dataset.tab)));
-  // Large screen : onglet par défaut = Calendrier (Accueil masqué, 2 onglets)
+  // Large screen : onglet par défaut = Galerie, sinon Espace (Accueil masqué).
   if (!window.matchMedia("(max-width: 767px)").matches) {
-    window._pubTabGo("agenda");
+    window._pubTabGo(defaultTab());
   }
 }
 
 // Carrousel mobile : pub-hero-page est le scroll-container horizontal.
-// 3 slides : cover-hero (home) → pub-agenda → pub-gallery-slot.
+// Slides : cover-hero (home) → pub-gallery-slot (→ pub-space).
 // pub-about est masqué sur mobile (son contenu est accessible sur grand écran).
 function wirePubSwipe() {
   const body = document.getElementById("pub-tab-body");
   if (!body) return;
   // "home" → cover-hero ; les onglets tabs gardent leurs ids
-  const tabIds = { "pub-cover-hero": "home", "pub-agenda": "agenda", "pub-gallery-slot": "gallery" };
+  const tabIds = { "pub-cover-hero": "home", "pub-gallery-slot": "gallery", "pub-space": "space" };
   // Sur mobile, pub-hero-page est le scroll-container ; sur desktop/tablet, c'est pub-tab-body.
   const isMobile = window.matchMedia("(max-width: 767px)").matches;
   const obsRoot = isMobile ? document.querySelector(".pub-hero-page") : body;
@@ -4777,7 +4733,7 @@ function wirePubSwipe() {
       }
     });
   }, { root: obsRoot, threshold: 0.5 });
-  // Observer cover-hero (slide home) + les panneaux agenda/gallery
+  // Observer cover-hero (slide home) + les panneaux gallery/space
   if (isMobile) {
     const cover = document.querySelector(".pub-cover-hero");
     if (cover) obs.observe(cover);
@@ -4786,162 +4742,10 @@ function wirePubSwipe() {
   // Navigation mobile : swipe natif géré par pub-hero-page (scroll-snap), pas de handler custom.
 }
 
-// Libellé de jour pour le regroupement (façon agenda Teams) : « Aujourd'hui »,
-// « Demain », sinon « lundi 2 juin ». Première lettre capitalisée.
-function fmtDayLabel(iso) {
-  const d = new Date(iso);
-  if (isNaN(d)) return iso;
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  const dd = new Date(d); dd.setHours(0, 0, 0, 0);
-  const diff = Math.round((dd - today) / 86400000);
-  const base = d.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
-  const cap = base.charAt(0).toUpperCase() + base.slice(1);
-  if (diff === 0) return t("apx_day_today").replace("{d}", cap);
-  if (diff === 1) return t("apx_day_tomorrow").replace("{d}", cap);
-  if (diff === -1) return t("apx_day_yesterday").replace("{d}", cap);
-  return cap;
-}
-
-const fmtHm = (d) => (d && !isNaN(d) ? d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }) : "");
-
-// Carte d'événement façon Teams : liseré d'accent à gauche, créneau horaire,
-// titre, métadonnées (lieu/lien/privé) et actions (éditer/supprimer) en mode édition.
-function eventCardHtml(e, editable, now) {
-  const start = new Date(e.starts_at);
-  const end = e.ends_at ? new Date(e.ends_at) : null;
-  const past = ((end && !isNaN(end) ? end : start).getTime() || 0) < now;
-  const t0 = fmtHm(start);
-  const t1 = fmtHm(end);
-  const isLive = e.kind === "live";
-  // Événement reçu via invitation acceptée : lecture seule (jointure virtuelle, il
-  // appartient à l'organisateur), badgé « Invité par @x » et sans actions d'édition.
-  const invited = e.invited_by ? String(e.invited_by) : "";
-  const meta = [
-    isLive ? `<span class="ev-live-tag">${icon("users", 12)}${t("ppf_live")}</span>` : "",
-    invited ? `<span class="ev-invited">${icon("users", 12)}${t("apx_invited_by").replace("{handle}", esc(invited))}</span>` : "",
-    e.location ? `<span class="ev-loc">${icon("pin", 13)}${esc(e.location)}</span>` : "",
-    e.link ? `<a class="ev-link" href="${esc(e.link)}" target="_blank" rel="noopener noreferrer" title="${esc(e.link)}">${icon("link", 13)}${t("apx_link_label")}</a>` : "",
-    editable && !invited && e.is_public === 0 ? `<span class="ev-private">${icon("lock", 12)}${t("apx_private")}</span>` : "",
-  ].filter(Boolean).join("");
-  return `<article class="ev-card${past ? " past" : ""}${isLive ? " ev-card-live" : ""}${invited ? " ev-card-invited" : ""}">
-      <div class="ev-time"><span class="ev-t0">${esc(t0) || "—"}</span>${t1 ? `<span class="ev-t1">${esc(t1)}</span>` : ""}</div>
-      <div class="ev-main">
-        <div class="ev-title">${esc(e.title)}</div>
-        ${meta ? `<div class="ev-meta">${meta}</div>` : ""}
-      </div>
-      ${editable && !invited ? `<div class="ev-actions">
-        <button type="button" class="ev-act" data-event-edit="${e.id}" title="${t("apx_edit")}" aria-label="${t("apx_edit_aria").replace("{title}", esc(e.title))}">${icon("pencil", 15)}</button>
-        <button type="button" class="ev-act danger" data-del-event="${e.id}" title="${t("com_delete")}" aria-label="${t("apx_delete_aria").replace("{title}", esc(e.title))}">${icon("trash", 15)}</button>
-      </div>` : ""}
-    </article>`;
-}
-
-function eventsHtml(events, editable) {
-  if (!events || !events.length)
-    return `<div class="ev-empty">${editable ? t("apx_no_events_editable") : t("apx_no_events")}</div>`;
-  const now = Date.now();
-  const sorted = [...events].sort((a, b) => (a.starts_at || "").localeCompare(b.starts_at || ""));
-  const groups = [];
-  let cur = null;
-  for (const e of sorted) {
-    const key = (e.starts_at || "").slice(0, 10);
-    if (!cur || cur.key !== key) { cur = { key, label: fmtDayLabel(e.starts_at), items: [] }; groups.push(cur); }
-    cur.items.push(e);
-  }
-  return `<div class="ev-agenda">${groups
-    .map((g) => `<section class="ev-group"><div class="ev-day">${esc(g.label)}</div>${g.items.map((e) => eventCardHtml(e, editable, now)).join("")}</section>`)
-    .join("")}</div>`;
-}
-
 /* ============================ ÉDITEUR PRIVÉ ============================== */
 
 // authHeaders / jsonAuth vivent dans net.js (importés). appState.key reste la source de
 // vérité ici ; on la reflète dans net.js via setAccessKey() à chaque (ré)auth.
-
-// Charge par jour (clé = jour UTC YYYY-MM-DD), cohérent avec le rendu du
-// calendrier : compte les événements + les RDV acceptés tombant ce jour-là.
-
-
-// Règle de dispo par défaut côté client (miroir de DEFAULT_AVAILABILITY serveur).
-
-// Préférences par défaut côté client (miroir de DEFAULT_SETTINGS du serveur).
-
-// Description de chaque option : libellé + aide affichés dans l'onglet « Options ».
-const OPTION_DEFS = [
-  { key: "allow_chat", nameKey: "apx_opt_chat_name", descKey: "apx_opt_chat_desc" },
-  { key: "allow_call", nameKey: "apx_opt_call_name", descKey: "apx_opt_call_desc" },
-  { key: "allow_video", nameKey: "apx_opt_video_name", descKey: "apx_opt_video_desc" },
-  { key: "allow_requests", nameKey: "apx_opt_req_name", descKey: "apx_opt_req_desc" },
-  { key: "public_availability", nameKey: "apx_opt_pubavail_name", descKey: "apx_opt_pubavail_desc" },
-];
-
-
-
-function periodsListHtml(periods) {
-  if (!periods.length) return `<p class="empty">${t("apx_no_period")}</p>`;
-  return periods
-    .map(
-      (p, i) => `<div class="avail-period">
-        <span class="ap-range">${esc(p.from)} → ${esc(p.to)}</span>
-        <span class="ap-status ${p.free ? "free" : "busy"}">${p.free ? t("apx_free") : t("apx_busy")}</span>
-        <button type="button" class="icon" data-del-period="${i}" title="${t("apx_remove")}" aria-label="${t("apx_remove_period")}">✕</button>
-      </div>`
-    )
-    .join("");
-}
-
-function optionsPanelHtml(settings) {
-  const s = { ...DEFAULT_SETTINGS, ...(settings || {}) };
-  const a = normalizeAvailability(s.availability);
-  return `
-    <p class="lbl-sm" style="margin:.2rem 0 .8rem;line-height:1.45">${t("apx_opt_lead")}</p>
-    <div class="opt-list">
-      ${OPTION_DEFS.map(
-        (o) => `<label class="opt-row">
-          <span class="opt-text"><span class="opt-name">${esc(t(o.nameKey))}</span><span class="opt-desc">${esc(t(o.descKey))}</span></span>
-          <input type="checkbox" class="opt-toggle" data-setting="${o.key}" ${s[o.key] ? "checked" : ""} />
-          <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
-        </label>`
-      ).join("")}
-    </div>
-
-    <div class="section-title">${t("apx_avail_general")}</div>
-    <p class="lbl-sm" style="margin:.2rem 0 .6rem;line-height:1.45">${t("apx_avail_note")}</p>
-    <div class="avail-days" id="avail-days" role="group" aria-label="${t("apx_avail_free_days")}">
-      ${DOW_LETTERS.map(
-        (d, i) => `<button type="button" class="avail-day ${a.weekdays[i] ? "on" : ""}" data-dow="${i}" aria-pressed="${a.weekdays[i]}" title="${DOW_NAMES[i]}">${d}</button>`
-      ).join("")}
-    </div>
-    <label class="opt-row">
-      <span class="opt-text"><span class="opt-name">${t("apx_weekend_name")}</span><span class="opt-desc">${t("apx_weekend_desc")}</span></span>
-      <input type="checkbox" class="opt-toggle" id="avail-weekend" ${a.weekdays[5] && a.weekdays[6] ? "checked" : ""} />
-      <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
-    </label>
-
-    <div class="section-title">${t("apx_hours_slots")}</div>
-    <div class="avail-hours">
-      <label>${t("apx_time_from")} <input type="time" id="avail-start" value="${esc(a.start)}" step="900" /></label>
-      <label>${t("apx_time_to")} <input type="time" id="avail-end" value="${esc(a.end)}" step="900" /></label>
-      <label class="avail-slot">${t("apx_slots")}
-        <select id="avail-slot">
-          ${[15, 30, 60].map((m) => `<option value="${m}" ${a.slot_minutes === m ? "selected" : ""}>${m === 60 ? t("apx_dur_hour") : m + " " + t("apx_dur_min")}</option>`).join("")}
-        </select>
-      </label>
-    </div>
-
-    <div class="section-title">${t("apx_periods")} <span class="deg">${t("apx_periods_hint")}</span></div>
-    <div id="avail-periods">${periodsListHtml(a.periods)}</div>
-    <div class="avail-period-add">
-      <input type="date" id="ap-from" aria-label="${t("apx_period_from")}" />
-      <input type="date" id="ap-to" aria-label="${t("apx_period_to")}" />
-      <select id="ap-status" aria-label="${t("apx_status_label")}">
-        <option value="busy">${t("apx_busy")}</option>
-        <option value="free">${t("apx_free")}</option>
-      </select>
-      <button type="button" class="btn sm" id="ap-add">${t("apx_add_period")}</button>
-    </div>`;
-}
-
 
 /* ----------------------- Navigation par onglets (v2) --------------------- */
 
@@ -5127,24 +4931,8 @@ onSSE("notif", (d) => {
     if (list.querySelector(".empty")) list.innerHTML = "";
     list.insertAdjacentHTML("afterbegin", notifItemHtml({ ...d, read: 0 }));
   }
-
-  // Nouvelle demande de RDV : la faire apparaître EN DIRECT (liste RDV, bannière
-  // « en attente de réponse » et badge Agenda) sans que l'utilisateur ait à
-  // recharger. On re-rend la vue privée depuis /api/me — sauf si une modale est
-  // ouverte ou une saisie en cours, auquel cas on se limite à incrémenter le
-  // badge Agenda pour ne pas interrompre l'action en cours.
-  if (d?.type === "request") {
-    const busy = document.querySelector(".overlay.open") ||
-      ["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName || "");
-    if (appState.key && !busy) {
-      renderPrivate(appState.key);
-    } else {
-      document.querySelectorAll("[data-agenda-badge]").forEach((badge) => {
-        badge.hidden = false;
-        badge.textContent = String((parseInt(badge.textContent || "0", 10) || 0) + 1);
-      });
-    }
-  }
+  // (Les notifications « request » / « invite » de l'agenda ne sont plus émises :
+  // l'agenda vit dans mindlog·calendar.)
 });
 
 // Met à jour EN DIRECT le badge « messages non lus » de l'onglet Chat (barre de
@@ -5177,7 +4965,7 @@ onSSE("device", (d) => {
 /* ----------------------------- Registre de plugins ----------------------- */
 // `host` est l'API exposée aux plugins (public/plugins/*.js) : primitives
 // partagées + registre. Les plugins n'importent rien de app.js ; ils reçoivent
-// `host` à l'enregistrement et y publient leurs capacités (host.chat, host.calendar)
+// `host` à l'enregistrement et y publient leurs capacités (host.chat, host.gallery…)
 // et d'éventuelles colonnes d'éditeur (hook editorColumns).
 const _plugins = [];
 Object.assign(host, {
@@ -5313,7 +5101,7 @@ function initGdprBanner() {
   window.__ML_APP_BOOTED__ = true;
   const v = window.__APP_V__ ? `?v=${encodeURIComponent(window.__APP_V__)}` : "";
   initGdprBanner();
-  for (const name of ["calendar", "chat", "gallery", "call", "live", "sync", "premium-upsell"]) {
+  for (const name of ["chat", "gallery", "call", "live", "sync", "premium-upsell"]) {
     try {
       const mod = await import(`./plugins/${name}.js${v}`);
       mod.default(host);
@@ -5338,4 +5126,4 @@ function initGdprBanner() {
 
 
 // Builders de vue + utilitaires partagés, consommés par editor/index.js (cycle assumé).
-export { PENDING_INVITE, avatarHtml, connectSSE, eventsHtml, fmtUptime, footer, headerAccount, headerSearchHtml, localPrice, notifItemHtml, openMiloTourPicker, openQR, periodsListHtml, profileCardHtml, relItemHtml, relationsListHtml, setupMiloEyes, tagChipsHtml, wireHeaderSearch, wireProfileMenuBtn };
+export { PENDING_INVITE, avatarHtml, connectSSE, fmtUptime, footer, headerAccount, headerSearchHtml, localPrice, notifItemHtml, openMiloTourPicker, openQR, profileCardHtml, relItemHtml, relationsListHtml, setupMiloEyes, tagChipsHtml, wireHeaderSearch, wireProfileMenuBtn };

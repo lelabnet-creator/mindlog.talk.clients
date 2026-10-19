@@ -58,8 +58,6 @@ export async function renderStatus() {
       <div class="section-title">${t("stat_numbers")}</div>
       <div class="status-metrics">
         ${metric(s.counts.identities, t("stat_identities"))}
-        ${metric(s.counts.events, t("stat_events"))}
-        ${metric(s.counts.requests, t("stat_requests"))}
         ${metric(s.counts.relations, t("stat_relations"))}
       </div>
       <p class="status-meta">${t("stat_meta").replace("{v}", esc(s.version)).replace("{u}", fmtUptime(s.uptimeSeconds)).replace("{date}", new Date(s.time).toLocaleString())}</p>

@@ -1,6 +1,6 @@
 // core.js — socle applicatif : identité du visiteur (qui suis-je), stockage
 // navigateur (clé/handle), profil courant, et petites constantes/aides partagées
-// (jours, settings par défaut, dates). Extrait verbatim. cf. docs/web-app-split-proposal.md
+// (settings par défaut, dates, URL de mindlog·calendar). Extrait verbatim. cf. docs/web-app-split-proposal.md
 import { api } from "./net.js";
 import { appState } from "./state.js";
 import { setActivityHandle } from "./activity-log.js";
@@ -10,13 +10,6 @@ export const KEY_STORE = "mindlog.key";
 export const HANDLE_STORE = "mindlog.handle";
 export const LAST_HANDLE_STORE = "mindlog.lasthandle";
 export const SESSION_HINT = "mindlog.session";
-export const DEFAULT_AVAILABILITY = {
-  weekdays: [true, true, true, true, true, false, false],
-  periods: [],
-  start: "09:00",
-  end: "18:00",
-  slot_minutes: 30,
-};
 
 export const app = document.getElementById("app");
 
@@ -114,26 +107,16 @@ export const DEFAULT_SETTINGS = {
   allow_chat: true,
   allow_call: true,
   allow_video: true,
-  allow_requests: true,
-  public_availability: true,
-  availability: DEFAULT_AVAILABILITY,
 };
 
-export const DOW_LETTERS = ["L", "M", "M", "J", "V", "S", "D"];
-
-export const DOW_NAMES = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"];
-
-export function normalizeAvailability(a) {
-  const src = a || {};
-  return {
-    weekdays: DEFAULT_AVAILABILITY.weekdays.map((d, i) =>
-      typeof (src.weekdays || [])[i] === "boolean" ? src.weekdays[i] : d
-    ),
-    periods: Array.isArray(src.periods) ? src.periods : [],
-    start: src.start || DEFAULT_AVAILABILITY.start,
-    end: src.end || DEFAULT_AVAILABILITY.end,
-    slot_minutes: [15, 30, 60].includes(src.slot_minutes) ? src.slot_minutes : DEFAULT_AVAILABILITY.slot_minutes,
-  };
+// L'agenda (disponibilités, événements, demandes de RDV) vit désormais dans
+// mindlog·calendar, à sa propre origine : `/@handle` y est l'agenda public,
+// `/me` sa gestion. Base sans « / » final, fournie par `GET /api/config`
+// (cf. index.html) ; vide si non configurée ou placeholder non substitué —
+// les liens « Agenda » ne sont alors pas affichés.
+export function calendarUrl() {
+  const u = typeof window !== "undefined" ? window.__CALENDAR_URL__ : "";
+  return typeof u === "string" && u && !u.startsWith("%%") ? u.replace(/\/+$/, "") : "";
 }
 
 export function relDate(s) {

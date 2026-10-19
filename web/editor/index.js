@@ -3,8 +3,8 @@
 // Importe le socle (core/state/deck/host/ui/crypto) ; quelques builders de vue
 // partagés avec landing/profil viennent de ../app.js (cycle assumé, usage runtime).
 // Extrait verbatim de app.js. cf. docs/web-app-split-proposal.md
-import { PENDING_INVITE, connectSSE, eventsHtml, footer, headerAccount, notifItemHtml, openMiloTourPicker, openQR, periodsListHtml, profileCardHtml, relItemHtml, relationsListHtml, tagChipsHtml, wireProfileMenuBtn } from "../app.js";
-import { DEFAULT_SETTINGS, DOW_LETTERS, DOW_NAMES, TOUR_SEEN_KEY, app, myHandle, myKey, normalizeAvailability, pick, relDate, setLastHandle, setMeProfile, setSessionHint, setStoredHandle, setStoredKey, storedHandle, storedKey, viewerHeaders } from "../core.js";
+import { PENDING_INVITE, connectSSE, footer, headerAccount, notifItemHtml, openMiloTourPicker, openQR, profileCardHtml, relItemHtml, relationsListHtml, tagChipsHtml, wireProfileMenuBtn } from "../app.js";
+import { DEFAULT_SETTINGS, TOUR_SEEN_KEY, app, myHandle, myKey, pick, relDate, setLastHandle, setMeProfile, setSessionHint, setStoredHandle, setStoredKey, storedHandle, storedKey, viewerHeaders } from "../core.js";
 import { e2eDecrypt, e2eEncrypt, ensureE2E } from "../crypto/e2e.js";
 import { mdDeviceId } from "../crypto/multidevice.js";
 import { ratchetEnsurePrekeys } from "../crypto/ratchet.js";
@@ -23,7 +23,6 @@ import { resolveMediaUrl, syncOwnerMediaKeys, uploadEncrypted } from "../premium
 import { addDeckColumn, deckState, removeDeckColumn } from "./deck.js";
 import { renderOptionsColumn } from "./tabs/options.js";
 import { renderIdentityColumn } from "./tabs/identity.js";
-import { renderAgendaColumn } from "./tabs/agenda.js";
 import { renderRelationsColumn } from "./tabs/relations.js";
 import { wireRelationsGraph } from "./relations-graph.js";
 import { renderNotificationsColumn } from "./tabs/notifications.js";
@@ -40,18 +39,6 @@ export async function consumePendingInvite() {
     const r = await api(`/api/invites/${encodeURIComponent(token)}/accept`, { method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() } });
     toast(t("eix_invite_accepted").replace("{handle}", r.handle));
   } catch { /* invitation expirée / déjà utilisée */ }
-}
-
-export function dayLoadMap(data) {
-  const load = {};
-  (data.events || []).forEach((e) => {
-    const d = (e.starts_at || "").slice(0, 10);
-    if (d) load[d] = (load[d] || 0) + 1;
-  });
-  (data.requests || []).forEach((r) => {
-    if (r.day && r.status === "accepted") load[r.day] = (load[r.day] || 0) + 1;
-  });
-  return load;
 }
 
 export async function renderPrivate(key) {
@@ -940,8 +927,6 @@ function wireGalDelete(itemEl) {
 export function renderEditor(data) {
   // Invitation en attente (lien `/i/<token>` ouvert avant connexion) → accepter.
   consumePendingInvite();
-  // Calendrier de l'éditeur : règle de dispo perso (jours/week-end/périodes).
-  host.calendar.setAvailability((data.settings || {}).availability);
   const photo = data.hasPhoto
     ? `<img class="photo" src="/api/identities/${encodeURIComponent(data.handle)}/photo?ts=${Date.now()}" alt="${t("eix_photo")}" />`
     : data.handle === "milo"
@@ -959,9 +944,6 @@ export function renderEditor(data) {
   const _incoming = data.incoming || [];
   const _reseauCount = _others.length + _incoming.length + (rel[2]?.length || 0) + (rel[3]?.length || 0);
 
-  // Charge par jour pour la heatmap du calendrier (événements + RDV acceptés).
-  const dayLoad = dayLoadMap(data);
-
   // « Mon profil » (édition de la carte) et « Notifications » ne sont plus des
   // colonnes du deck : leur contenu est intégré comme PANNEAUX du Compte (sous-menu
   // conservé). On les construit ici et on les passe à renderAccountColumn.
@@ -972,7 +954,6 @@ export function renderEditor(data) {
   const espacesHtml = renderPremiumPage(data);
   const cols = [
     renderAccountColumn(data, { photo, profileHtml, notifsHtml, espacesHtml }),
-    renderAgendaColumn(data, { reqFilterChips, requestsHtml, dayLoad }),
     renderRelationsColumn(data, { incomingListHtml }),
   ];
 
@@ -1101,11 +1082,12 @@ export function renderEditor(data) {
   </div>`;
 
   // Ordre du menu (communication d'abord) : Accueil · Chat · Notifs · Réseau ·
-  // Mon ID · Galerie (plugin, order 45) · Agenda · Options (réglages, en dernier).
-  // cols = [Compte, Agenda, Relations] (+ optCol, commColHtml). Profil & Notifs sont
-  // désormais des panneaux DANS Compte, plus des colonnes.
-  const coreOrders = [5, 50, 30, 60, 10];
-  const coreLabels = ["Compte", "Agenda", "Relations", "Options", "Chat"];
+  // Mon ID · Galerie (plugin, order 45) · Options (réglages, en dernier).
+  // cols = [Compte, Relations] (+ optCol, commColHtml). Profil & Notifs sont
+  // désormais des panneaux DANS Compte, plus des colonnes. L'ancienne colonne
+  // « Agenda » est partie dans mindlog·calendar (lien depuis Options).
+  const coreOrders = [5, 30, 60, 10];
+  const coreLabels = ["Compte", "Relations", "Options", "Chat"];
   const allCols = (() => {
     const list = [...cols, optCol, commColHtml]
       .map((html, i) => ({ order: coreOrders[i], label: coreLabels[i], html }))
@@ -1123,7 +1105,6 @@ export function renderEditor(data) {
   setMeProfile({ name: _displayName, hasPhoto: data.hasPhoto, plan: data.plan });
   const BNAV = {
     Identité: { label: t("nav_monid"), ic: "user" },
-    Agenda: { label: t("nav_agenda"), ic: "calendar" },
     Relations: { label: t("nav_reseau"), ic: "users" },
     Notifications: { label: t("nav_notifs"), ic: "bell" },
     Compte: { label: t("nav_compte"), ic: "user" },
@@ -1158,19 +1139,18 @@ export function renderEditor(data) {
      ${(() => {
        // Compteurs par colonne (à partir du payload). Chaque total du bas est la
        // VENTILATION de ses sous-menus : messages (Discussions) → Échanges,
-       // demandes de relation → Réseau, RDV en attente → Agenda, notifs → Compte.
+       // demandes de relation → Réseau, notifs → Compte.
        // (chatUnread est calculé plus haut, réutilisé ici.)
        const incomingCount = (data.incoming || []).length;
-       const rdvPending = data.pending || 0; // même source que le sous-onglet RDV (Agenda)
        const notifCount = data.unread || 0;
-       const unreadFor = (label) => ({ Chat: chatUnread, Relations: incomingCount, Agenda: rdvPending, Compte: notifCount }[label] || 0);
+       const unreadFor = (label) => ({ Chat: chatUnread, Relations: incomingCount, Compte: notifCount }[label] || 0);
        // Refonte 2026 — barre directe (sans menu « Plus ») : Accueil · Chat ·
-       // Réseau · Agenda · Galerie · Options. « Mon ID » (Identité) est accessible
+       // Réseau · Galerie · Options. « Mon ID » (Identité) est accessible
        // depuis l'Accueil (« Modifier ma carte ») ; les Notifications via la cloche
        // du header. L'ordre est fixe et chaque label n'apparaît qu'une fois.
        // « Live » est désormais un sous-mode du rail Échanges (cf. comm-rail),
        // plus une entrée principale du menu du bas.
-       const NAV = ["Chat", "Relations", "Agenda", "Compte"];
+       const NAV = ["Chat", "Relations", "Compte"];
        const prem = (data.subscription?.plan ?? data.plan) === "premium";
        // Couronne Premium (même dessin que sur l'avatar du header).
        const CROWN = `<span class="bnav-crown" aria-hidden="true"><svg viewBox="0 0 24 22" fill="currentColor"><path d="M2 6.5l4.2 3.6L12 2.5l5.8 7.6 4.2-3.6-1.9 10.4H3.9L2 6.5z"/><rect x="3.4" y="18.2" width="17.2" height="2.9" rx="1.3"/></svg></span>`;
@@ -1180,7 +1160,7 @@ export function renderEditor(data) {
          const hasUnread = unreadFor(label);
          // Chaque colonne a un badge à sélecteur STABLE (masqué si 0) : la mise à
          // jour temps réel (SSE) le retrouve sans re-rendu du menu.
-         const badgeAttr = { Chat: "data-chat-badge", Relations: "data-rel-badge", Agenda: "data-agenda-badge", Compte: "data-notif-badge" }[label];
+         const badgeAttr = { Chat: "data-chat-badge", Relations: "data-rel-badge", Compte: "data-notif-badge" }[label];
          const badge = badgeAttr
            ? `<span class="bnav-badge" ${badgeAttr} ${hasUnread ? "" : "hidden"}>${hasUnread ? (hasUnread > 99 ? "99+" : hasUnread) : ""}</span>`
            : (hasUnread ? `<span class="bnav-badge">${hasUnread > 99 ? "99+" : hasUnread}</span>` : "");
@@ -1676,47 +1656,6 @@ export function incomingListHtml(list) {
   return list.map((r) => relItemHtml(r, { incoming: true })).join("");
 }
 
-export function reqFilterChips(requests) {
-  const n = { all: requests.length, pending: 0, accepted: 0, declined: 0 };
-  requests.forEach((r) => { n[r.status] = (n[r.status] || 0) + 1; });
-  const chip = (val, label) =>
-    `<button class="req-chip${val === "pending" ? " active" : ""}" data-req-filter="${val}">${label} <span class="chip-n">${n[val]}</span></button>`;
-  return (
-    chip("pending", t("eix_filter_pending")) +
-    chip("all", t("eix_filter_all")) +
-    chip("accepted", t("eix_filter_accepted")) +
-    chip("declined", t("eix_filter_declined"))
-  );
-}
-
-export function requestsHtml(requests) {
-  if (!requests.length) return `<li class="empty">${t("eix_no_requests")}</li>`;
-  return requests
-    .map((r) => {
-      const badge =
-        r.status === "accepted" ? "ok" : r.status === "declined" ? "no" : "pending";
-      const label =
-        r.status === "accepted" ? t("eix_status_accepted") : r.status === "declined" ? t("eix_status_declined") : t("eix_status_pending");
-      return `
-      <li class="request" data-status="${r.status}">
-        <div class="req-head">
-          <strong>${esc(r.name)}</strong>
-          <span class="req-status ${badge}">${label}</span>
-        </div>
-        ${r.day ? `<div class="req-slot">${t("eix_desired_date")}${esc(host.calendar.fmtDay(r.day))}${r.time ? `${t("eix_at_prefix")}<strong>${esc(r.time)}</strong>` : ""}</div>` : ""}
-        ${r.email ? `<div class="req-meta"><a href="mailto:${esc(r.email)}">${esc(r.email)}</a></div>` : ""}
-        ${r.message ? `<div class="req-msg">${esc(r.message)}</div>` : ""}
-        <div class="req-actions">
-          ${r.status === "pending" ? `
-          <button class="btn sm" data-req-accept="${r.id}">${t("eix_accept")}</button>
-          <button class="btn sm" data-req-decline="${r.id}">${t("eix_refuse")}</button>` : ""}
-          <button class="icon" data-req-del="${r.id}" title="${t("com_delete")}">✕</button>
-        </div>
-      </li>`;
-    })
-    .join("");
-}
-
 export function socialEditHtml(fields) {
   const byKey = Object.fromEntries(fields.map((f) => [f.key, f.value]));
   return SOCIALS.map((net) => {
@@ -2014,114 +1953,8 @@ export function wireEditor(data) {
     });
   }
 
-  // Si le créateur est Premium ET a coché le bénéfice « Lives », la modale
-  // propose un type « Live » qui rend l'événement joignable par les abonnés.
-  const _liveAvailable = !!data.space?.benefits?.lives;
-
-  // Rafraîchit l'agenda EN PLACE après ajout/édition/suppression d'un événement
-  // (calendrier + liste « Mes événements »), sans recharger tout l'éditeur : on
-  // conserve la vue (Jour/Semaine/Mois) et le scroll courants. `data.events` est
-  // la source de vérité locale, mutée par onSaved/onDeleted.
-  // Agenda affiché = mes événements + ceux d'autrui dont j'ai accepté l'invitation
-  // (lecture seule, badgés « Invité par @x » via leur champ invited_by).
-  const agendaEvents = () => [...(data.events || []), ...(data.invitedEvents || [])];
-  const refreshAgenda = () => {
-    const fill = app.querySelector(".calendar-fill");
-    if (fill) fill.innerHTML = host.calendar.html(data.overrides || {}, true, dayLoadMap(data), false, agendaEvents());
-    const list = app.querySelector(".agenda-events");
-    if (list) list.innerHTML = eventsHtml(agendaEvents(), true);
-    wireAgenda();
-  };
-  const onSaved = (saved) => {
-    if (!saved?.id) { renderPrivate(appState.key); return; }
-    const evs = (data.events ||= []);
-    const i = evs.findIndex((e) => String(e.id) === String(saved.id));
-    if (i >= 0) evs[i] = saved; else evs.push(saved);
-    refreshAgenda();
-  };
-  const onDeleted = (eventId) => {
-    data.events = (data.events || []).filter((e) => String(e.id) !== String(eventId));
-    refreshAgenda();
-  };
-  // Contacts proposés à l'invitation : relations DIRECTES (sortantes) = degré 1.
-  // getRelationsByDegree renvoie un objet { 1:[…], 2:[…], 3:[…] }, pas un tableau.
-  // Le serveur revalide la relation de toute façon.
-  const _inviteContacts = (data.relations?.[1] || [])
-    .map((r) => ({ handle: r.handle, name: r.display_name || r.handle }));
-  const modalOpts = () => ({ liveAvailable: _liveAvailable, onSaved, onDeleted, contacts: _inviteContacts });
-
-  // Câblage (ré-appliqué à chaque refreshAgenda, car le DOM agenda est régénéré).
-  function wireAgenda() {
-    // Événements : suppression directe (corbeille sur la carte), création et
-    // édition via la modale composer (façon Teams).
-    app.querySelectorAll("[data-del-event]").forEach((b) =>
-      b.addEventListener("click", async () => {
-        const card = b.closest(".ev-card");
-        const title = card?.querySelector(".ev-title")?.textContent?.trim() || t("eix_this_event");
-        if (!(await confirmDialog(t("eix_delete_confirm_title").replace("{title}", title), { ok: t("com_delete"), danger: true }))) return;
-        await api(`/api/agenda/${b.dataset.delEvent}`, { method: "DELETE", headers: authHeaders() });
-        onDeleted(b.dataset.delEvent);
-      })
-    );
-    app.querySelectorAll("[data-event-new]").forEach((b) =>
-      b.addEventListener("click", () => openEventModal(null, modalOpts()))
-    );
-    app.querySelectorAll("[data-event-edit]").forEach((b) =>
-      b.addEventListener("click", () => {
-        const ev = (data.events || []).find((e) => String(e.id) === b.dataset.eventEdit);
-        if (ev) openEventModal(ev, modalOpts());
-      })
-    );
-
-    // Disponibilités : navigation de période + bascule des jours + clics events.
-    // Le plugin émet `calendar:newAt` au clic d'une case horaire vide (vues
-    // Jour/Semaine) ou du bouton « + » d'une cellule (vue Mois) → modale
-    // d'événement préremplie à l'heure cible.
-    const calEl = app.querySelector(".calendar");
-    host.calendar.wire(
-      calEl,
-      data.overrides || {},
-      true,
-      data.handle,
-      dayLoadMap(data),
-      false,
-      agendaEvents(),
-      (ev) => openEventModal(ev, modalOpts()),
-    );
-    calEl?.addEventListener("calendar:newAt", (e) => {
-      const startsAt = e.detail?.startsAt; // "YYYY-MM-DDTHH:00" local
-      if (startsAt) openEventModal(null, { ...modalOpts(), prefill: { starts_at: startsAt } });
-    });
-  }
-  wireAgenda();
-
-  // RSVP des invitations reçues : Accepter / Refuser. Câblé UNE fois (le bloc
-  // .invites-recv n'est pas régénéré par refreshAgenda, contrairement à la liste).
-  const respondInvite = async (eventId, accept) => {
-    try {
-      await api(`/api/agenda/invite/${encodeURIComponent(eventId)}/respond`, {
-        method: "POST", headers: jsonAuth(), body: JSON.stringify({ accept }),
-      });
-    } catch (e) { return toast(e?.message || t("eix_failed")); }
-    // Retire l'invitation de l'état local + de l'UI.
-    const inv = (data.myInvites || []).find((iv) => String(iv.event.id) === String(eventId));
-    data.myInvites = (data.myInvites || []).filter((iv) => String(iv.event.id) !== String(eventId));
-    app.querySelector(`.invite-card[data-invite-event="${CSS.escape(String(eventId))}"]`)?.remove();
-    if (!app.querySelector(".invite-card")) app.querySelector(".invites-recv")?.remove();
-    if (accept && inv) {
-      // L'événement accepté rejoint l'agenda (lecture seule, badgé « Invité par @x »).
-      (data.invitedEvents ||= []).push({ ...inv.event, invited_by: inv.organizer_handle });
-      refreshAgenda();
-    }
-    toast(accept ? t("eix_invite_accepted_short") : t("eix_invite_declined"));
-  };
-  app.querySelectorAll("[data-invite-accept]").forEach((b) =>
-    b.addEventListener("click", () => respondInvite(b.dataset.inviteAccept, true)));
-  app.querySelectorAll("[data-invite-decline]").forEach((b) =>
-    b.addEventListener("click", () => respondInvite(b.dataset.inviteDecline, false)));
-
-  // Aperçu façon téléphone (colonne Accueil) : swipe entre Accueil / Calendrier /
-  // Galerie + pastilles de pagination, et montage de la vraie galerie (plugin).
+  // Aperçu façon téléphone (colonne Accueil) : swipe entre Accueil / Galerie
+  // + pastilles de pagination, et montage de la vraie galerie (plugin).
   const ltScreens = app.querySelector("#lt-screens");
   if (ltScreens) {
     const dots = [...app.querySelectorAll("#lt-dots .lt-dot")];
@@ -3011,8 +2844,6 @@ export function wireEditor(data) {
     const act = e.target.closest("[data-action]");
     if (act) { e.stopPropagation(); openContactPicker(act.dataset.action); }
   });
-  // Aperçu téléphone : « Prendre rendez-vous » (écran Calendrier) → onglet Agenda.
-  app.querySelector("#lt-book")?.addEventListener("click", () => deckGoLabel("Agenda"));
 
   // Sélecteur de contact : tuiles « Discuter » / « Passer un appel » du Menu.
   async function openContactPicker(mode) {
@@ -3111,20 +2942,6 @@ export function wireEditor(data) {
     }
     const contactB = e.target.closest("[data-contact-notif]");
     if (contactB) { e.stopPropagation(); openContactColumn(contactB.dataset.contactNotif); }
-  });
-
-  // Onglets de la colonne Agenda/RDV
-  app.querySelectorAll(".agenda-tab").forEach((tab) => {
-    tab.addEventListener("click", () => {
-      app.querySelectorAll(".agenda-tab").forEach((t) => {
-        t.classList.toggle("active", t === tab);
-        t.setAttribute("aria-selected", String(t === tab));
-      });
-      const id = tab.dataset.tab;
-      app.querySelectorAll(".agenda-panel").forEach((p) => {
-        p.hidden = p.id !== `agenda-${id}`;
-      });
-    });
   });
 
   // Clic sur une relation. Pour un CONTACT direct (degré 1) on ouvre sa page publique
@@ -3341,96 +3158,6 @@ export function wireEditor(data) {
         toast(e.message);
       }
     });
-  });
-
-  // Onglet « Options » → Disponibilités générales (jours / week-end / horaires /
-  // créneaux / périodes). Tout changement enregistre la règle et rafraîchit le
-  // calendrier de l'agenda en place (les jours par défaut suivent la nouvelle règle).
-  const availState = normalizeAvailability((data.settings || {}).availability);
-  const refreshEditorCalendar = () => {
-    host.calendar.setAvailability(availState);
-    const fill = app.querySelector(".calendar-fill");
-    if (fill && fill.querySelector(".calendar")) {
-      const load = dayLoadMap(data);
-      fill.innerHTML = host.calendar.html(data.overrides || {}, true, load);
-      host.calendar.wire(fill.querySelector(".calendar"), data.overrides || {}, true, data.handle, load);
-    }
-  };
-  const saveAvail = async () => {
-    try {
-      await api("/api/me/settings", {
-        method: "PATCH",
-        headers: jsonAuth(),
-        body: JSON.stringify({ availability: availState }),
-      });
-      data.settings = { ...(data.settings || {}), availability: { ...availState } };
-      refreshEditorCalendar();
-      toast(t("eix_avail_saved"));
-    } catch (e) {
-      toast(e.message);
-    }
-  };
-  // Jours de la semaine (toggle individuel)
-  app.querySelectorAll("#avail-days .avail-day").forEach((b) =>
-    b.addEventListener("click", () => {
-      const i = Number(b.dataset.dow);
-      availState.weekdays[i] = !availState.weekdays[i];
-      b.classList.toggle("on", availState.weekdays[i]);
-      b.setAttribute("aria-pressed", String(availState.weekdays[i]));
-      const wk = app.querySelector("#avail-weekend");
-      if (wk) wk.checked = availState.weekdays[5] && availState.weekdays[6];
-      saveAvail();
-    })
-  );
-  // Week-end (sam + dim d'un coup)
-  app.querySelector("#avail-weekend")?.addEventListener("change", (e) => {
-    const on = e.target.checked;
-    availState.weekdays[5] = on;
-    availState.weekdays[6] = on;
-    app.querySelectorAll("#avail-days .avail-day").forEach((b) => {
-      const i = Number(b.dataset.dow);
-      if (i === 5 || i === 6) {
-        b.classList.toggle("on", on);
-        b.setAttribute("aria-pressed", String(on));
-      }
-    });
-    saveAvail();
-  });
-  // Horaires + finesse des créneaux
-  app.querySelector("#avail-start")?.addEventListener("change", (e) => {
-    if (e.target.value) { availState.start = e.target.value; saveAvail(); }
-  });
-  app.querySelector("#avail-end")?.addEventListener("change", (e) => {
-    if (e.target.value) { availState.end = e.target.value; saveAvail(); }
-  });
-  app.querySelector("#avail-slot")?.addEventListener("change", (e) => {
-    availState.slot_minutes = Number(e.target.value);
-    saveAvail();
-  });
-  // Périodes : ajout / suppression
-  const wirePeriodDeletes = () =>
-    app.querySelectorAll("[data-del-period]").forEach((b) =>
-      b.addEventListener("click", () => {
-        availState.periods.splice(Number(b.dataset.delPeriod), 1);
-        const box = app.querySelector("#avail-periods");
-        if (box) box.innerHTML = periodsListHtml(availState.periods);
-        wirePeriodDeletes();
-        saveAvail();
-      })
-    );
-  wirePeriodDeletes();
-  app.querySelector("#ap-add")?.addEventListener("click", () => {
-    const fromEl = app.querySelector("#ap-from");
-    const toEl = app.querySelector("#ap-to");
-    const from = fromEl.value, to = toEl.value;
-    if (!from || !to) { toast("Renseignez les deux dates."); return; }
-    const [f, t] = from <= to ? [from, to] : [to, from];
-    availState.periods.push({ from: f, to: t, free: app.querySelector("#ap-status").value === "free" });
-    fromEl.value = ""; toEl.value = "";
-    const box = app.querySelector("#avail-periods");
-    if (box) box.innerHTML = periodsListHtml(availState.periods);
-    wirePeriodDeletes();
-    saveAvail();
   });
 
   // Réseaux sociaux : sauvegarde par champ de carte `social_<net>`.
@@ -4066,88 +3793,6 @@ export function wireEditor(data) {
   };
   relSearch?.addEventListener("input", filterRels);
 
-  // Demandes de RDV : statut, suppression, filtre — tout en place (pas de reload,
-  // on reste sur l'onglet RDV actif).
-  const reqList = app.querySelector("ul.requests");
-  const STATUS_BADGE = { accepted: ["ok", t("eix_status_accepted")], declined: ["no", t("eix_status_declined")], pending: ["pending", t("eix_status_pending")] };
-  const activeReqFilter = () =>
-    app.querySelector("[data-req-filter].active")?.dataset.reqFilter || "pending";
-  const applyReqFilter = (val) => {
-    app.querySelectorAll("li.request").forEach((li) => {
-      li.style.display = val === "all" || li.dataset.status === val ? "" : "none";
-    });
-  };
-  // Recompte les puces depuis le DOM et réaffiche l'état vide si besoin.
-  const refreshReqChips = () => {
-    const lis = [...app.querySelectorAll("li.request")];
-    const n = { all: lis.length, pending: 0, accepted: 0, declined: 0 };
-    lis.forEach((li) => { n[li.dataset.status] = (n[li.dataset.status] || 0) + 1; });
-    app.querySelectorAll("[data-req-filter]").forEach((chip) => {
-      const span = chip.querySelector(".chip-n");
-      if (span) span.textContent = n[chip.dataset.reqFilter] ?? 0;
-    });
-    const empty = reqList?.querySelector("li.empty");
-    if (!lis.length && reqList && !empty) reqList.innerHTML = `<li class="empty">${t("eix_no_requests")}</li>`;
-    applyReqFilter(activeReqFilter());
-  };
-
-  // Un RDV traité n'est plus « en attente » : on répercute le nouveau statut sur
-  // la donnée en cache (data.requests / data.pending) pour que la bannière
-  // « en attente de réponse » et le badge Agenda restent justes sur les autres
-  // onglets (rendus depuis ce même cache), sans reload.
-  const syncPending = () => {
-    const p = (data.requests || []).filter((r) => r.status === "pending").length;
-    data.pending = p;
-    document.querySelectorAll("[data-agenda-badge]").forEach((el) => {
-      if (p) { el.textContent = p > 99 ? "99+" : String(p); el.hidden = false; }
-      else { el.textContent = ""; el.hidden = true; }
-    });
-  };
-
-  const setStatus = async (id, status, btn) => {
-    await api(`/api/requests/${id}`, { method: "PATCH", headers: jsonAuth(), body: JSON.stringify({ status }) });
-    const li = btn.closest("li.request");
-    if (li) {
-      li.dataset.status = status;
-      const badge = li.querySelector(".req-status");
-      const [cls, label] = STATUS_BADGE[status] || STATUS_BADGE.pending;
-      if (badge) { badge.className = `req-status ${cls}`; badge.textContent = label; }
-      // Une demande traitée ne propose plus Accepter/Refuser (seul le ✕ reste).
-      li.querySelectorAll("[data-req-accept],[data-req-decline]").forEach((el) => el.remove());
-    }
-    const rec = (data.requests || []).find((r) => String(r.id) === String(id));
-    if (rec) rec.status = status;
-    syncPending();
-    refreshReqChips();
-    toast(status === "accepted" ? t("eix_request_accepted") : t("eix_request_declined"));
-  };
-  app.querySelectorAll("[data-req-accept]").forEach((b) =>
-    b.addEventListener("click", () => setStatus(b.dataset.reqAccept, "accepted", b))
-  );
-  app.querySelectorAll("[data-req-decline]").forEach((b) =>
-    b.addEventListener("click", () => setStatus(b.dataset.reqDecline, "declined", b))
-  );
-  app.querySelectorAll("[data-req-del]").forEach((b) =>
-    b.addEventListener("click", async () => {
-      await api(`/api/requests/${b.dataset.reqDel}`, { method: "DELETE", headers: authHeaders() });
-      b.closest("li.request")?.remove();
-      data.requests = (data.requests || []).filter((r) => String(r.id) !== String(b.dataset.reqDel));
-      syncPending();
-      refreshReqChips();
-      toast(t("eix_request_deleted"));
-    })
-  );
-
-  // Filtre par statut (client) : « En attente » actif par défaut.
-  const reqChips = app.querySelectorAll("[data-req-filter]");
-  reqChips.forEach((chip) =>
-    chip.addEventListener("click", () => {
-      reqChips.forEach((c) => c.classList.toggle("active", c === chip));
-      applyReqFilter(chip.dataset.reqFilter);
-    })
-  );
-  if (app.querySelector("li.request")) applyReqFilter("pending");
-
   renderPrivateFooter(data);
 }
 
@@ -4155,21 +3800,6 @@ export function renderPrivateFooter(data) {
   footer.innerHTML = `<p style="margin:.4rem 0"><span class="mobile-hide">${CREDIT()} · </span><a href="${esc(data.publicUrl)}" target="_blank" rel="noopener">${t("eix_view_my_page")} ↗</a></p>`;
 }
 
-// ISO → valeur d'un <input type="datetime-local"> (heure LOCALE, sans secondes).
-function toLocalInput(iso) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (isNaN(d)) return "";
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-// Modale composer d'événement (création ou édition), inspirée du « New meeting »
-// de Teams : titre, créneau début/fin, lieu, lien, notes, visibilité publique.
-// `event` null → création (POST /api/agenda) ; sinon édition (PUT /api/agenda/:id).
-// opts.liveAvailable : affiche le sélecteur « Événement / Live » (créateur premium
-// avec bénéfice lives activé). Un live planifié est visible par tous mais
-// joignable uniquement par les abonné·e·s de l'espace premium.
 // Sélecteur d'ajout de contact depuis le réseau étendu (degré 2/3). Modale stylée
 // (pas de popup navigateur) : choix du type de lien (Ami/Pro/Autre) puis POST, et
 // rafraîchissement complet pour que le contact apparaisse aussitôt dans tous les onglets.
@@ -4220,281 +3850,3 @@ function openAddContactChooser(handle, name) {
       }
     }));
 }
-
-// Vue LECTURE SEULE d'un événement reçu par invitation (jointure virtuelle : il
-// appartient à l'organisateur, on n'autorise ni édition ni suppression chez l'invité).
-function openInvitedEventView(event) {
-  const overlay = document.createElement("div");
-  overlay.className = "overlay open";
-  const fmt = (iso) => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleString("fr-FR", { dateStyle: "full", timeStyle: "short" }); };
-  const row = (label, val) => (val ? `<div class="group"><label>${label}</label><div>${esc(val)}</div></div>` : "");
-  overlay.innerHTML = `
-    <div class="panel ev-modal" role="dialog" aria-modal="true" aria-label="${t("eix_event")}">
-      <button type="button" class="close" id="ive-close" aria-label="${t("com_close")}">✕</button>
-      <div class="ev-header"><h2>${esc(event.title || t("eix_event"))}</h2></div>
-      <p class="lbl-sm" style="margin:.1rem 0 1rem">${icon("users", 13)} ${t("eix_invited_by").replace("{handle}", esc(event.invited_by))}</p>
-      ${row(t("eix_start"), fmt(event.starts_at))}
-      ${event.ends_at ? row(t("eix_end"), fmt(event.ends_at)) : ""}
-      ${row(t("eix_location"), event.location)}
-      ${event.link ? `<div class="group"><label>${t("eix_link")}</label><div><a href="${esc(event.link)}" target="_blank" rel="noopener noreferrer">${esc(event.link)}</a></div></div>` : ""}
-      ${row(t("eix_notes"), event.notes)}
-      <div class="actions"><button type="button" class="btn" id="ive-ok">${t("com_close")}</button></div>
-    </div>`;
-  document.body.appendChild(overlay);
-  const close = () => overlay.remove();
-  overlay.addEventListener("click", (e) => e.target === overlay && close());
-  overlay.querySelector("#ive-close").addEventListener("click", close);
-  overlay.querySelector("#ive-ok").addEventListener("click", close);
-  overlay.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.stopPropagation(); close(); } });
-}
-
-export function openEventModal(event, opts = {}) {
-  // Événement reçu par invitation → vue lecture seule (pas le formulaire d'édition).
-  if (event?.invited_by) return openInvitedEventView(event);
-  const editing = !!event;
-  const initialKind = editing && event.kind === "live" ? "live" : "event";
-  // Préfill création depuis un clic sur une case horaire de la vue Jour/Semaine :
-  // opts.prefill = { starts_at: "YYYY-MM-DDTHH:00" } (heure locale).
-  const prefillStart = !editing && opts.prefill?.starts_at ? opts.prefill.starts_at : "";
-  // On expose le toggle si le créateur peut planifier un live, OU si on édite
-  // un live existant (pour permettre la rétrogradation en simple événement).
-  const showKindToggle = !!opts.liveAvailable || initialKind === "live";
-  const overlay = document.createElement("div");
-  overlay.className = "overlay open";
-  // Layout : tout le contenu mode-spécifique porte [data-only="event"|"live"]
-  // ou [data-when="..."] et CSS gère la bascule via form[data-kind]. Pas de
-  // re-render DOM au switch, juste une transition propre.
-  overlay.innerHTML = `
-    <div class="panel ev-modal" data-kind="${initialKind}" role="dialog" aria-modal="true" aria-labelledby="ev-modal-title">
-      <button type="button" class="close" id="ev-close" aria-label="${t("com_close")}">✕</button>
-      <div class="ev-header">
-        <h2 id="ev-modal-title">
-          <span data-when="event">${editing ? t("eix_edit_event") : t("eix_new_event")}</span>
-          <span data-when="live">${editing ? t("eix_edit_live") : t("eix_new_live")}</span>
-        </h2>
-        <span class="ev-live-badge" data-only="live" aria-hidden="true"><span class="ev-live-dot"></span> ${t("eix_live_now")}</span>
-      </div>
-      <form id="ev-form" novalidate data-kind="${initialKind}">
-        ${showKindToggle ? `
-        <div class="group ev-kind-row" role="radiogroup" aria-label="${t("eix_event_type")}">
-          <button type="button" class="ev-kind-tab${initialKind === "event" ? " active" : ""}" data-kind="event" role="radio" aria-checked="${initialKind === "event"}">
-            ${icon("calendar", 16)}
-            <span class="ev-kind-label">${t("eix_event")}</span>
-            <span class="ev-kind-sub">${t("eix_event_sub")}</span>
-          </button>
-          <button type="button" class="ev-kind-tab${initialKind === "live" ? " active" : ""}" data-kind="live" role="radio" aria-checked="${initialKind === "live"}">
-            ${icon("users", 16)}
-            <span class="ev-kind-label">Live</span>
-            <span class="ev-kind-sub">${t("eix_broadcast_brand")}</span>
-          </button>
-        </div>
-        <div class="ev-live-hint" data-only="live" role="note">
-          ${icon("lock", 14)}
-          <div>${t("eix_live_hint")}</div>
-        </div>` : ""}
-        <div class="group">
-          <label for="ev-title">${t("eix_title")} <span class="req" aria-hidden="true">*</span></label>
-          <input id="ev-title" name="title" maxlength="200" required aria-required="true"
-                 placeholder="${t("eix_title_ph")}"
-                 data-placeholder-live="${t("eix_title_live_ph")}"
-                 value="${editing ? esc(event.title || "") : ""}" />
-        </div>
-        <div class="group ev-grid2">
-          <div>
-            <label for="ev-start">${t("eix_start")} <span class="req" aria-hidden="true">*</span></label>
-            <input id="ev-start" name="starts_at" type="datetime-local" required aria-required="true" value="${editing ? toLocalInput(event.starts_at) : prefillStart}" />
-          </div>
-          <div>
-            <label for="ev-end">${t("eix_end")} <span class="opt">${t("eix_optional")}</span></label>
-            <input id="ev-end" name="ends_at" type="datetime-local" value="${editing ? toLocalInput(event.ends_at) : ""}" />
-          </div>
-        </div>
-        <div class="group" data-only="event">
-          <label for="ev-loc">${t("eix_location")} <span class="opt">${t("eix_optional")}</span></label>
-          <input id="ev-loc" name="location" maxlength="200" placeholder="${t("eix_location_ph")}" value="${editing ? esc(event.location || "") : ""}" />
-        </div>
-        <div class="group" data-only="event">
-          <label for="ev-link">${t("eix_link")} <span class="opt">${t("eix_optional")}</span></label>
-          <input id="ev-link" name="link" type="url" maxlength="500" placeholder="https://…" value="${editing ? esc(event.link || "") : ""}" />
-        </div>
-        <div class="group">
-          <label for="ev-notes">
-            <span data-when="event">${t("eix_notes")} <span class="opt">${t("eix_optional")}</span></span>
-            <span data-when="live">${t("eix_live_desc")} <span class="opt">${t("eix_public_visible")}</span></span>
-          </label>
-          <textarea id="ev-notes" name="notes" rows="3" maxlength="4000"
-                    placeholder="${t("eix_notes_ph")}"
-                    data-placeholder-live="${t("eix_notes_live_ph")}">${editing ? esc(event.notes || "") : ""}</textarea>
-        </div>
-        <label class="ev-toggle-row ev-notify-row" data-only="live">
-          <input type="checkbox" id="ev-notify" name="notify_subs" ${editing ? (event.notify_subs ? "checked" : "") : "checked"} />
-          <div class="ev-toggle-text">
-            <strong>${icon("bell", 14)} ${t("eix_notify_subs")}</strong>
-            <small>${t("eix_notify_subs_sub")}</small>
-          </div>
-        </label>
-        <label class="ev-toggle-row ev-public-row">
-          <input type="checkbox" id="ev-public" name="is_public" ${editing ? (event.is_public !== 0 ? "checked" : "") : "checked"} />
-          <div class="ev-toggle-text">
-            <strong>${icon("eye", 14)} ${t("eix_public_on_page")}</strong>
-            <small data-when="event">${t("eix_public_event_sub")}</small>
-            <small data-when="live">${t("eix_public_live_sub")}</small>
-          </div>
-        </label>
-        ${editing && initialKind === "event" ? `
-        <div class="group ev-invites" data-only="event">
-          <label>${icon("users", 14)} ${t("eix_guests")}</label>
-          <div class="ev-invite-list" id="ev-invite-list"><p class="lbl-sm" style="margin:.2rem 0">${t("com_loading")}</p></div>
-          <div class="add-row" style="grid-template-columns:1fr auto;margin-top:.4rem">
-            <input id="ev-invite-handle" list="ev-invite-cands" placeholder="${t("eix_contact_handle_ph")}" autocomplete="off" />
-            <button type="button" class="btn sm" id="ev-invite-add">${t("eix_invite")}</button>
-          </div>
-          <datalist id="ev-invite-cands">${(opts.contacts || []).map((cc) => `<option value="${esc(cc.handle)}">${esc(cc.name || cc.handle)}</option>`).join("")}</datalist>
-        </div>` : ""}
-        <div class="err" id="ev-err"></div>
-        <div class="actions">
-          ${editing ? `<button type="button" class="btn danger ghost" id="ev-delete">${icon("trash", 15)} ${t("com_delete")}</button>` : ""}
-          <button type="button" class="btn" id="ev-cancel">${t("com_cancel")}</button>
-          <button type="submit" class="btn primary" id="ev-submit">
-            <span data-when="event">${editing ? t("eix_save") : t("eix_add")}</span>
-            <span data-when="live">${editing ? t("eix_save_live") : t("eix_schedule_live")}</span>
-          </button>
-        </div>
-      </form>
-    </div>`;
-  document.body.appendChild(overlay);
-
-  const close = () => overlay.remove();
-  const errEl = overlay.querySelector("#ev-err");
-  overlay.addEventListener("click", (e) => e.target === overlay && close());
-  overlay.querySelector("#ev-close").addEventListener("click", close);
-  overlay.querySelector("#ev-cancel").addEventListener("click", close);
-  overlay.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.stopPropagation(); close(); } });
-  setTimeout(() => overlay.querySelector("#ev-title").focus(), 30);
-
-  overlay.querySelector("#ev-delete")?.addEventListener("click", async () => {
-    if (!(await confirmDialog(t("eix_delete_confirm_title").replace("{title}", event.title), { ok: t("com_delete"), danger: true }))) return;
-    await api(`/api/agenda/${event.id}`, { method: "DELETE", headers: authHeaders() });
-    close();
-    if (typeof opts.onDeleted === "function") opts.onDeleted(event.id);
-    else renderPrivate(appState.key);
-  });
-
-  // Toggle « Événement / Live » : maintient form.dataset.kind (CSS gère la
-  // bascule des éléments [data-only]/[data-when]) et swap les placeholders qui
-  // sont des attributs, donc inaccessibles à CSS.
-  const formEl = overlay.querySelector("#ev-form");
-  const swapPlaceholders = (k) => {
-    overlay.querySelectorAll("[data-placeholder-live]").forEach((el) => {
-      if (!("placeholderDefault" in el.dataset)) el.dataset.placeholderDefault = el.placeholder;
-      el.placeholder = k === "live" ? el.dataset.placeholderLive : el.dataset.placeholderDefault;
-    });
-  };
-  swapPlaceholders(initialKind);
-  const panelEl = overlay.querySelector(".ev-modal");
-  overlay.querySelectorAll(".ev-kind-tab").forEach((tab) =>
-    tab.addEventListener("click", () => {
-      const k = tab.dataset.kind === "live" ? "live" : "event";
-      formEl.dataset.kind = k;
-      // Duplique data-kind sur le panel pour les éléments hors-form (badge
-      // EN DIRECT du header) — évite la dépendance à :has() pour le ciblage.
-      panelEl.dataset.kind = k;
-      overlay.querySelectorAll(".ev-kind-tab").forEach((t) => {
-        const on = t.dataset.kind === k;
-        t.classList.toggle("active", on);
-        t.setAttribute("aria-checked", on ? "true" : "false");
-      });
-      swapPlaceholders(k);
-    })
-  );
-
-  formEl.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    errEl.textContent = "";
-    const fd = new FormData(e.target);
-    const title = (fd.get("title") || "").trim();
-    const start = fd.get("starts_at");
-    const end = fd.get("ends_at");
-    if (!title) { errEl.textContent = t("eix_title_required"); return; }
-    if (!start) { errEl.textContent = t("eix_start_required"); return; }
-    if (end && new Date(end) < new Date(start)) { errEl.textContent = t("eix_end_after_start"); return; }
-    const kind = formEl.dataset.kind === "live" ? "live" : "event";
-    const payload = {
-      title,
-      starts_at: new Date(start).toISOString(),
-      ends_at: end ? new Date(end).toISOString() : null,
-      // En mode live, lieu et lien externe n'ont pas de sens (le lieu = la
-      // plateforme, le lien = /live/:id auto-généré) → on n'envoie que pour
-      // les vrais événements.
-      location: kind === "event" ? (fd.get("location") || "").trim() : "",
-      link: kind === "event" ? (fd.get("link") || "").trim() : "",
-      notes: (fd.get("notes") || "").trim(),
-      is_public: fd.get("is_public") === "on",
-      kind,
-      notify_subs: kind === "live" ? fd.get("notify_subs") === "on" : false,
-    };
-    const submitBtn = e.target.querySelector("button[type=submit]");
-    submitBtn.disabled = true;
-    try {
-      const saved = await api(editing ? `/api/agenda/${event.id}` : "/api/agenda", {
-        method: editing ? "PUT" : "POST",
-        headers: jsonAuth(),
-        body: JSON.stringify(payload),
-      });
-      close();
-      toast(editing ? t("eix_event_updated") : t("eix_event_added"));
-      // Rafraîchissement EN PLACE si l'appelant fournit onSaved (cas agenda) :
-      // on évite le rechargement complet de l'éditeur (flash + perte de vue/scroll).
-      if (typeof opts.onSaved === "function") opts.onSaved(saved);
-      else renderPrivate(appState.key);
-    } catch (err) {
-      submitBtn.disabled = false;
-      errEl.textContent = t("eix_save_retry");
-    }
-  });
-
-  // ----- Invités (organisateur, événements existants uniquement) -----
-  if (editing && initialKind === "event") {
-    const listBox = overlay.querySelector("#ev-invite-list");
-    const statusLabel = (s) =>
-      s === "accepted" ? t("eix_inv_accepted") : s === "declined" ? t("eix_inv_declined") : t("eix_inv_pending");
-    const renderInvites = (invites) => {
-      if (!listBox) return;
-      if (!invites.length) { listBox.innerHTML = `<p class="lbl-sm" style="margin:.2rem 0">${t("eix_no_guests_yet")}</p>`; return; }
-      listBox.innerHTML = invites.map((iv) => `
-        <div class="ev-invite-row">
-          <span class="ev-invite-h">@${esc(iv.handle)}</span>
-          <span class="ev-invite-status st-${esc(iv.status)}">${statusLabel(iv.status)}</span>
-          <button type="button" class="btn-field-del" data-invite-remove="${esc(iv.handle)}" title="${t("eix_remove")}" aria-label="${t("eix_remove_handle").replace("{handle}", esc(iv.handle))}">✕</button>
-        </div>`).join("");
-      listBox.querySelectorAll("[data-invite-remove]").forEach((b) =>
-        b.addEventListener("click", async () => {
-          try { await api(`/api/agenda/${event.id}/invites/${encodeURIComponent(b.dataset.inviteRemove)}`, { method: "DELETE", headers: authHeaders() }); }
-          catch (e) { return toast(e?.message || t("eix_failed")); }
-          loadInvites();
-        }));
-    };
-    const loadInvites = async () => {
-      try { const r = await api(`/api/agenda/${event.id}/invites`, { headers: authHeaders() }); renderInvites(r.invites || []); }
-      catch { if (listBox) listBox.innerHTML = `<p class="lbl-sm" style="margin:.2rem 0">${t("eix_guests_load_fail")}</p>`; }
-    };
-    const addInvite = async () => {
-      const inp = overlay.querySelector("#ev-invite-handle");
-      const h = (inp?.value || "").trim().replace(/^@/, "");
-      if (!h) return;
-      try {
-        const r = await api(`/api/agenda/${event.id}/invites`, { method: "POST", headers: jsonAuth(), body: JSON.stringify({ handles: [h] }) });
-        const res = (r.results || [])[0];
-        if (res && res.ok === false) toast(res.error || t("eix_invite_impossible"));
-        else { inp.value = ""; toast(t("eix_invite_sent")); }
-        renderInvites(r.invites || []);
-      } catch (e) { toast(e?.message || t("eix_failed")); }
-    };
-    overlay.querySelector("#ev-invite-add")?.addEventListener("click", addInvite);
-    overlay.querySelector("#ev-invite-handle")?.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") { e.preventDefault(); addInvite(); }
-    });
-    loadInvites();
-  }
-}
-
